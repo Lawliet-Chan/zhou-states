@@ -1,0 +1,108 @@
+# 示例剧本：一座小城，玩家既是所有者也是管理者。
+# 用 key 互相引用；workers 中的数字是投入的人数。
+
+[[characters]]
+key = "player"
+name = "姬虎"
+rank = "nan"
+reputation = 500
+
+[[cities]]
+key = "bei"
+name = "邶"
+owner = "player"
+manager = "player"
+totem = "玄鸟"
+resources = ["farmland", "water", "forest", "salt_pond", "copper_mine"]
+buildings = { foundry = 1 }
+treasury = { grain = 20, salt = 5, bronze = 40, hide = 10, gui = 2 }
+private_wealth = { grain = 16, salt = 7 }
+tax_rate = 0.1
+
+[[cities.groups]]
+key = "dongguo"
+name = "东郭农人"
+size = 160
+skills = ["farming", "weaving"]
+culture = 100
+happiness = 600
+
+[[cities.groups]]
+key = "nanli"
+name = "南里农人"
+size = 80
+skills = ["farming"]
+culture = 100
+happiness = 600
+
+[[cities.groups]]
+key = "yanhu"
+name = "盐户"
+size = 20
+skills = ["salt_making", "fishing"]
+culture = 80
+happiness = 550
+
+[[cities.groups]]
+key = "xishi"
+name = "西市工匠"
+size = 30
+skills = ["smelting", "armory"]
+culture = 120
+happiness = 600
+
+[[cities.groups]]
+key = "shizu"
+name = "士族"
+size = 10
+skills = ["shi", "ritual_craft"]
+culture = 300
+happiness = 650
+
+[[cities.officials]]
+key = "jia"
+name = "士甲"
+from_group = "shizu"
+
+[[cities.officials]]
+key = "yi"
+name = "士乙"
+from_group = "shizu"
+
+[[cities.officials]]
+key = "bing"
+name = "士丙"
+from_group = "shizu"
+
+[[cities.officials]]
+key = "ding"
+name = "士丁"
+from_group = "shizu"
+
+# 士甲：带东郭农人民营种五谷
+[[cities.assignments]]
+key = "farm"
+shi = "jia"
+task = { kind = "produce", recipe = "grain", mode = "min" }
+workers = { dongguo = 35 }
+
+# 士乙：向东郭农人收税
+[[cities.assignments]]
+key = "tax"
+shi = "yi"
+task = { kind = "collect_tax" }
+workers = { dongguo = 35 }
+
+# 士丙：官营铸兵器
+[[cities.assignments]]
+key = "arms"
+shi = "bing"
+task = { kind = "produce", recipe = "weapon", mode = "guan" }
+workers = { xishi = 30 }
+
+# 士丁：征调南里农人修城墙
+[[cities.assignments]]
+key = "wall"
+shi = "ding"
+task = { kind = "construct", building = "city_wall" }
+workers = { nanli = 35 }

@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["crates/zhou-core", "crates/zhou-cli"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+zhou-core = { path = "crates/zhou-core" }

@@ -1,0 +1,272 @@
+# 数值配置
+# 所有可调整的数值都在这里，改完重新运行即可生效，不需要改代码。
+# 物品、行业、配方、建筑都用英文 id 引用，name 是显示用的中文名。
+
+# 一回合为一季，季节顺序即回合顺序
+seasons = ["春", "夏", "秋", "冬"]
+
+[population]
+# 消耗按每多少人计算
+per_people = 100
+# 技能槽上限
+max_skills = 4
+# 技能槽中有 1/2/3/4 项技能时的专精度
+specialization = [1.0, 0.85, 0.7, 0.6]
+# 愉悦度满值时，每回合的人口增长率
+growth_rate = 0.02
+# 愉悦度低于该值时人口不增长
+growth_min_happiness = 400
+# 愉悦度低于该值时人口开始外流
+emigration_threshold = 200
+# 人口外流时，每回合离开的比例
+emigration_rate = 0.05
+# 完全断粮时，每回合饿死的比例（按缺口比例折算）
+starvation_rate = 0.05
+# 消耗不足时，是否由府库补足
+treasury_covers_shortfall = true
+
+# 每 per_people 人每回合的消耗。goods 中任意一种都可以满足，按顺序扣除
+[[population.consumption]]
+name = "食物"
+goods = ["grain", "fish", "meat"]
+amount = 2.0
+
+[[population.consumption]]
+name = "盐"
+goods = ["salt"]
+amount = 1.0
+
+[happiness]
+max = 1000.0
+# 每回合愉悦度向 target 回归的比例
+target = 600.0
+drift_rate = 0.1
+# 整群人全部投入官营或营建时，每回合降低的愉悦度（按参与比例折算）
+guan_penalty = 60.0
+# 税率为 100% 时，每回合降低的愉悦度（按税率和被征税比例折算）
+tax_penalty = 300.0
+# 完全断粮时，每回合降低的愉悦度（按缺口比例折算）
+hunger_penalty = 200.0
+# 本回合举行祭祀时，所有人群增加的愉悦度
+sacrifice_bonus = 20.0
+# 藏富于民：全城民间财富的人均价值达到 wealth_full_per_person 时，
+# 所有人群每回合增加 wealth_bonus 愉悦度；不足时按比例折算
+wealth_bonus = 30.0
+wealth_full_per_person = 0.2
+# 愉悦度为 0 和满值时的产出倍率，中间线性插值
+min_output_mult = 0.5
+max_output_mult = 1.2
+
+[shi]
+# 「士」技能的 id
+skill = "shi"
+# 士人管理上限的基础值
+base_capacity = 50.0
+# 新任用士人的管理上限比例，随任职回合数提升到 1.0
+new_capacity_ratio = 0.6
+ramp_turns = 8
+# 忠诚度为 0 时的管理上限倍率，忠诚度满值时为 1.0
+loyalty_min_mult = 0.7
+loyalty_max = 1000.0
+initial_loyalty = 700.0
+# 府库支付不起开支时，每回合降低的忠诚度；按时支付时增加的忠诚度
+unpaid_loyalty_penalty = 100.0
+paid_loyalty_gain = 10.0
+
+# 每名士人每回合的开支，由府库支付
+[shi.upkeep]
+grain = 0.1
+
+[economy]
+# 官营相对民营的生产效率
+guan_efficiency = 0.5
+default_tax_rate = 0.1
+max_tax_rate = 0.5
+# 所有者与管理者不是同一人时的产能
+absentee_mult = 0.6
+# 城市处于被攻占状态时的产能
+occupied_mult = 0.75
+
+[sacrifice]
+# 可用于祭祀的礼器
+vessel_goods = ["ding", "gui"]
+# 每件礼器每次祭祀增加的文化值，越接近上限增加越少
+culture_per_vessel = 5.0
+culture_max = 1000.0
+
+[ritual]
+# 列鼎制度中计数的礼器
+ding_good = "ding"
+# 每超出一只鼎，每回合扣除的风评
+excess_reputation_penalty = 5.0
+
+# 各身份的用鼎上限
+[ritual.ding_limit]
+tianzi = 9
+gong = 7
+hou = 7
+bo = 5
+zi = 5
+nan = 3
+none = 1
+
+# ---------------------------------------------------------------- 物品
+# value：价值，用于折算民间财富的多少，不填为 1
+
+[goods]
+grain = { name = "粮", value = 1.0 }
+fish = { name = "鱼", value = 1.0 }
+meat = { name = "肉", value = 1.5 }
+salt = { name = "盐", value = 2.0 }
+hide = { name = "皮革", value = 2.0 }
+horse = { name = "马", value = 20.0 }
+bronze = { name = "青铜", value = 5.0 }
+weapon = { name = "兵器", value = 8.0 }
+armor = { name = "甲", value = 8.0 }
+ding = { name = "鼎", value = 100.0 }
+gui = { name = "簋", value = 50.0 }
+jade = { name = "玉器", value = 30.0 }
+cloth = { name = "布", value = 3.0 }
+
+# ---------------------------------------------------------------- 行业
+# default_recipe：未被管理的人口按技能槽第一项技能自主民营时使用的配方
+
+[skills]
+shi = { name = "士" }
+farming = { name = "农·五谷", default_recipe = "grain" }
+fishing = { name = "农·渔", default_recipe = "fish" }
+salt_making = { name = "农·盐", default_recipe = "salt" }
+hunting = { name = "畜牧·狩猎", default_recipe = "hunt" }
+horse_breeding = { name = "畜牧·驯马", default_recipe = "horse" }
+smelting = { name = "百工·冶", default_recipe = "bronze" }
+armory = { name = "百工·军备", default_recipe = "weapon" }
+ritual_craft = { name = "百工·礼器", default_recipe = "gui" }
+luxury = { name = "百工·奢侈品", default_recipe = "jade" }
+weaving = { name = "百工·纺织", default_recipe = "cloth" }
+building = { name = "百工·建筑" }
+water = { name = "百工·水利" }
+commerce = { name = "商业" }
+soldier = { name = "军队" }
+
+# ---------------------------------------------------------------- 配方
+# outputs：每人每回合的产出；inputs：每人每回合消耗的原料
+# 实际数量 = 每人数值 × 人数 × 季节倍率 × 专精度 × 愉悦度倍率 × 城市产能（× 官营效率）
+# resource：城市必须拥有的自然资源；facility：城市必须拥有的建筑
+# season_mult：春、夏、秋、冬的倍率
+
+[recipes.grain]
+name = "种五谷"
+skill = "farming"
+resource = "farmland"
+outputs = { grain = 0.05 }
+season_mult = [0.5, 0.5, 2.0, 0.0]
+
+[recipes.fish]
+name = "捕鱼"
+skill = "fishing"
+resource = "water"
+outputs = { fish = 0.03 }
+season_mult = [1.0, 1.0, 1.0, 0.3]
+
+[recipes.salt]
+name = "制盐"
+skill = "salt_making"
+resource = "salt_pond"
+outputs = { salt = 0.2 }
+season_mult = [1.0, 1.0, 1.0, 0.5]
+
+[recipes.hunt]
+name = "狩猎"
+skill = "hunting"
+resource = "forest"
+outputs = { meat = 0.02, hide = 0.01 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[recipes.horse]
+name = "驯马"
+skill = "horse_breeding"
+resource = "pasture"
+outputs = { horse = 0.005 }
+season_mult = [1.0, 1.0, 1.0, 0.5]
+
+[recipes.bronze]
+name = "冶青铜"
+skill = "smelting"
+resource = "copper_mine"
+facility = "foundry"
+outputs = { bronze = 0.02 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[recipes.weapon]
+name = "铸兵器"
+skill = "armory"
+facility = "foundry"
+inputs = { bronze = 0.01 }
+outputs = { weapon = 0.01 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[recipes.armor]
+name = "制甲"
+skill = "armory"
+inputs = { hide = 0.02 }
+outputs = { armor = 0.01 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[recipes.ding]
+name = "铸鼎"
+skill = "ritual_craft"
+facility = "foundry"
+inputs = { bronze = 0.02 }
+outputs = { ding = 0.002 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[recipes.gui]
+name = "铸簋"
+skill = "ritual_craft"
+facility = "foundry"
+inputs = { bronze = 0.02 }
+outputs = { gui = 0.004 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[recipes.jade]
+name = "琢玉"
+skill = "luxury"
+resource = "jade_mine"
+outputs = { jade = 0.005 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[recipes.cloth]
+name = "纺织"
+skill = "weaving"
+outputs = { cloth = 0.03 }
+season_mult = [1.0, 1.0, 1.0, 1.5]
+
+# ---------------------------------------------------------------- 建筑
+# labor：完成所需的总人力（人 × 回合）
+# skill：参与营建的人口需要具备的技能，不填表示任何人都可以服劳役
+# materials：开工时从府库扣除的材料
+# 营建一律视为官营，参与者的愉悦度会下降
+
+[buildings.city_wall]
+name = "城墙"
+labor = 300.0
+season_mult = [0.5, 0.3, 0.5, 1.0]
+
+[buildings.foundry]
+name = "冶厂"
+skill = "building"
+labor = 120.0
+materials = { bronze = 5.0 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[buildings.market]
+name = "市"
+skill = "building"
+labor = 100.0
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[buildings.palace]
+name = "宫殿"
+skill = "building"
+labor = 400.0
+season_mult = [1.0, 1.0, 1.0, 1.0]
