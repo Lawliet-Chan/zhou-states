@@ -10,6 +10,8 @@ seasons = ["春", "夏", "秋", "冬"]
 per_people = 100
 # 技能槽上限
 max_skills = 4
+# 人群没有指定技能时的初始技能。没有人生下来什么都不会，新生的人口继承所在人群的技能槽
+initial_skill = "farming"
 # 技能槽中有 1/2/3/4 项技能时的专精度
 specialization = [1.0, 0.85, 0.7, 0.6]
 # 愉悦度满值时，每回合的人口增长率
@@ -53,6 +55,8 @@ sacrifice_bonus = 20.0
 # 所有人群每回合增加 wealth_bonus 愉悦度；不足时按比例折算
 wealth_bonus = 30.0
 wealth_full_per_person = 0.2
+# 人口超出居住上限一倍时，每回合降低的愉悦度（按超出比例折算）
+crowding_penalty = 100.0
 # 愉悦度为 0 和满值时的产出倍率，中间线性插值
 min_output_mult = 0.5
 max_output_mult = 1.2
@@ -88,17 +92,24 @@ absentee_mult = 0.6
 occupied_mult = 0.75
 
 [sacrifice]
-# 可用于祭祀的礼器
-vessel_goods = ["ding", "gui"]
 # 每件礼器每次祭祀增加的文化值，越接近上限增加越少
 culture_per_vessel = 5.0
 culture_max = 1000.0
 
+# 可用于祭祀的礼器，以及每件折合的件数：精品折合更多
+[sacrifice.vessels]
+ding = 1.0
+gui = 1.0
+ding_fine = 2.0
+gui_fine = 2.0
+
 [ritual]
 # 列鼎制度中计数的礼器
-ding_good = "ding"
-# 每超出一只鼎，每回合扣除的风评
+ding_goods = ["ding", "ding_fine"]
+# 每超出一只鼎扣除的风评。同一次僭越只扣一次，超出得更多时扣多出的部分
 excess_reputation_penalty = 5.0
+# 城市面积每超出一块地扣除的风评，规则同上
+excess_tile_penalty = 2.0
 
 # 各身份的用鼎上限
 [ritual.ding_limit]
@@ -110,8 +121,63 @@ zi = 5
 nan = 3
 none = 1
 
+# 各身份名下每座城市的地块上限
+[ritual.tile_limit]
+tianzi = 30
+gong = 20
+hou = 20
+bo = 15
+zi = 15
+nan = 10
+none = 7
+
+[quality]
+# 技能槽中有 1/2/3/4 项技能时，产出中精品的比例（只对设了 fine 的物品生效）
+fine_share = [0.3, 0.15, 0.05, 0.0]
+
+[loyalty]
+# 人口对管理者个人的忠诚度。换管理者时归零重来，旧管理者攒下的不能带走
+max = 1000.0
+reset = 0.0
+initial = 500.0
+# 每回合：不收税时 +low_tax_gain，税率为上限时 -high_tax_loss（按税率和被征税比例折算），两者相抵
+# 默认数值下，实际税率低于上限的 1/3（即 1/6）时忠诚度上升，高于时下降
+low_tax_gain = 10.0
+high_tax_loss = 30.0
+# 赏赐民众：人均每 1 价值的财货，所有人群增加的忠诚度
+grant_gain_per_value = 100.0
+# 忠诚度低于 threshold 时开始出现下面的后果，越低越严重；下面各项是忠诚度为 0 时的值，中间线性插值
+threshold = 300.0
+# 官营罢工：派去官营生产、营建、开垦、水利的人只有这个比例肯出工，其余的人回去自主民营
+guan_turnout = 0.5
+# 民营的人不罢工，但收税只能收上来这个比例
+tax_share = 0.5
+# 民营的产量倍率
+min_output = 0.8
+
+[quota]
+# 规定任务：所有者给管理者定每年要上缴的物资。管理者随时可以从府库上缴到所有者的私库，
+# 每年冬季结算后看全年累计交够没有，影响所有者对管理者的信任
+initial_trust = 500.0
+max_trust = 1000.0
+complete_trust = 50.0
+# 每种物资都交够、且总价值达到规定的 exceed_ratio 倍，算超额完成
+exceed_ratio = 1.2
+exceed_trust = 120.0
+# 一点没交时降低的信任，按缺口比例（按价值折算）减少
+fail_trust_penalty = 150.0
+
+[reclaim]
+# 开垦在春、夏、秋、冬的人力倍率
+season_mult = [1.0, 0.3, 0.5, 0.8]
+
+[learning]
+# 学一项新技能需要的回合数，学习期间照常干活。丢弃技能、调整顺序当回合生效
+turns = 1
+
 # ---------------------------------------------------------------- 物品
 # value：价值，用于折算民间财富的多少，不填为 1
+# fine：这种物品的精品，生产时按专精度分出一部分精品
 
 [goods]
 grain = { name = "粮", value = 1.0 }
@@ -121,12 +187,19 @@ salt = { name = "盐", value = 2.0 }
 hide = { name = "皮革", value = 2.0 }
 horse = { name = "马", value = 20.0 }
 bronze = { name = "青铜", value = 5.0 }
-weapon = { name = "兵器", value = 8.0 }
-armor = { name = "甲", value = 8.0 }
-ding = { name = "鼎", value = 100.0 }
-gui = { name = "簋", value = 50.0 }
-jade = { name = "玉器", value = 30.0 }
-cloth = { name = "布", value = 3.0 }
+weapon = { name = "兵器", value = 8.0, fine = "weapon_fine" }
+armor = { name = "甲", value = 8.0, fine = "armor_fine" }
+ding = { name = "鼎", value = 100.0, fine = "ding_fine" }
+gui = { name = "簋", value = 50.0, fine = "gui_fine" }
+jade = { name = "玉器", value = 30.0, fine = "jade_fine" }
+cloth = { name = "布", value = 3.0, fine = "cloth_fine" }
+coin = { name = "钱币", value = 1.0 }
+weapon_fine = { name = "精兵", value = 24.0 }
+armor_fine = { name = "精甲", value = 24.0 }
+ding_fine = { name = "精鼎", value = 300.0 }
+gui_fine = { name = "精簋", value = 150.0 }
+jade_fine = { name = "精玉", value = 90.0 }
+cloth_fine = { name = "细布", value = 9.0 }
 
 # ---------------------------------------------------------------- 行业
 # default_recipe：未被管理的人口按技能槽第一项技能自主民营时使用的配方
@@ -145,13 +218,80 @@ luxury = { name = "百工·奢侈品", default_recipe = "jade" }
 weaving = { name = "百工·纺织", default_recipe = "cloth" }
 building = { name = "百工·建筑" }
 water = { name = "百工·水利" }
-commerce = { name = "商业" }
+commerce = { name = "商业", default_recipe = "trade" }
 soldier = { name = "军队" }
+
+# ---------------------------------------------------------------- 地块
+# 地块之间没有主次之分：每块地都能住人、劳作、建建筑，区别只在能做哪一行
+# housing：每块地能居住的人口；jobs：每块地能容纳劳作的人数
+# 城市的居住上限 = 所有地块的 housing + 建筑的 housing，人口增长不会超过它
+# building_slots：每块地能建几座建筑，官营和民营都算；建筑不影响这块地的居住和劳作
+# reclaim_skill / reclaim_labor：开垦这种地需要的技能和人力（人 × 回合）
+#   开垦期间参与的人一直被占用，人力满后当回合到手
+
+[terrains.farmland]
+name = "耕地"
+housing = 50
+jobs = 60
+building_slots = 3
+reclaim_skill = "farming"
+reclaim_labor = 200.0
+
+[terrains.water]
+name = "水泽"
+housing = 50
+jobs = 30
+building_slots = 3
+reclaim_skill = "fishing"
+reclaim_labor = 150.0
+
+[terrains.forest]
+name = "山林"
+housing = 50
+jobs = 30
+building_slots = 3
+reclaim_skill = "hunting"
+reclaim_labor = 150.0
+
+[terrains.salt_pond]
+name = "盐池"
+housing = 50
+jobs = 30
+building_slots = 3
+reclaim_skill = "salt_making"
+reclaim_labor = 200.0
+
+[terrains.copper_mine]
+name = "铜矿"
+housing = 50
+jobs = 30
+building_slots = 3
+reclaim_skill = "smelting"
+reclaim_labor = 300.0
+
+[terrains.jade_mine]
+name = "玉矿"
+housing = 50
+jobs = 20
+building_slots = 3
+reclaim_skill = "luxury"
+reclaim_labor = 300.0
+
+[terrains.pasture]
+name = "草场"
+housing = 50
+jobs = 30
+building_slots = 3
+reclaim_skill = "horse_breeding"
+reclaim_labor = 150.0
 
 # ---------------------------------------------------------------- 配方
 # outputs：每人每回合的产出；inputs：每人每回合消耗的原料
 # 实际数量 = 每人数值 × 人数 × 季节倍率 × 专精度 × 愉悦度倍率 × 城市产能（× 官营效率）
-# resource：城市必须拥有的自然资源；facility：城市必须拥有的建筑
+# resource：劳作所在的地块，人数受这种地块的 jobs 总和限制；facility：城市必须拥有的建筑
+# base_jobs：不靠地块的配方，不需要建筑也能容纳的人数；建筑可以用 jobs 增加容量
+#   既没有 resource、base_jobs，也没有建筑提供容量的配方不限人数
+# min_specialization：专精度低于该值的人群做不了
 # season_mult：春、夏、秋、冬的倍率
 
 [recipes.grain]
@@ -216,6 +356,7 @@ season_mult = [1.0, 1.0, 1.0, 1.0]
 name = "铸鼎"
 skill = "ritual_craft"
 facility = "foundry"
+min_specialization = 0.85
 inputs = { bronze = 0.02 }
 outputs = { ding = 0.002 }
 season_mult = [1.0, 1.0, 1.0, 1.0]
@@ -232,6 +373,7 @@ season_mult = [1.0, 1.0, 1.0, 1.0]
 name = "琢玉"
 skill = "luxury"
 resource = "jade_mine"
+min_specialization = 0.85
 outputs = { jade = 0.005 }
 season_mult = [1.0, 1.0, 1.0, 1.0]
 
@@ -241,16 +383,33 @@ skill = "weaving"
 outputs = { cloth = 0.03 }
 season_mult = [1.0, 1.0, 1.0, 1.5]
 
+# 商贾：交易赚的钱币归民间，市越多能容纳的商贾越多
+[recipes.trade]
+name = "经商"
+skill = "commerce"
+base_jobs = 10
+outputs = { coin = 0.15 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
 # ---------------------------------------------------------------- 建筑
 # labor：完成所需的总人力（人 × 回合）
 # skill：参与营建的人口需要具备的技能，不填表示任何人都可以服劳役
 # materials：开工时从府库扣除的材料
-# 营建一律视为官营，参与者的愉悦度会下降
+# 营建时要定下建成后是官营还是民营，之后不能改：
+#   官营建筑里只能官营劳作，产出全部进府库，产能按 economy.guan_efficiency 折算
+#   民营建筑里只能民营劳作，产出归民众，府库只能收税
+#   facility 要求的建筑、jobs 提供的劳作位置都按经营方式区分；城墙、宫殿这类效果对全城生效，不分官营民营
+# 营建本身一律由府库出材料、视为官营，参与者的愉悦度会下降
+# 建筑效果（每座）：jobs 增加某个配方的劳作容量；housing 增加居住上限；
+#   happiness 每回合给全城人群增加的愉悦度；shi_capacity_bonus 增加士人管理上限的比例
+# terrains：只能建在这些地块上，不填表示哪里都能建。营建时要指定建在哪块地上
 
+# 城墙：民有所依，安心度日。守城的作用等军队系统再做
 [buildings.city_wall]
 name = "城墙"
 labor = 300.0
 season_mult = [0.5, 0.3, 0.5, 1.0]
+happiness = 3.0
 
 [buildings.foundry]
 name = "冶厂"
@@ -264,9 +423,27 @@ name = "市"
 skill = "building"
 labor = 100.0
 season_mult = [1.0, 1.0, 1.0, 1.0]
+jobs = { trade = 40 }
 
+# 宫殿：治所，士人办事更得力
 [buildings.palace]
 name = "宫殿"
 skill = "building"
 labor = 400.0
 season_mult = [1.0, 1.0, 1.0, 1.0]
+housing = 30
+shi_capacity_bonus = 0.1
+
+# ---------------------------------------------------------------- 地块改良
+# 和营建一样按人力累积进度，视为官营；完成后这块地升一级
+# terrains：可以改良的地块；yield_bonus：每级增加的产量比例
+# 劳作时先占用产量高的地块
+
+[improvements.irrigation]
+name = "水利"
+skill = "water"
+labor = 150.0
+season_mult = [0.5, 0.2, 0.5, 1.0]
+terrains = ["farmland"]
+max_level = 2
+yield_bonus = 0.25

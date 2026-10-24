@@ -8,8 +8,8 @@ pub mod state;
 pub mod turn;
 
 pub use command::{Command, CommandError, apply};
-pub use config::Config;
+pub use config::{Config, Pool};
 pub use inventory::Inventory;
 pub use scenario::load_scenario;
-pub use state::{Character, GameState, Id, Mode, Task};
+pub use state::{Building, Character, GameState, Id, JobSlot, Learning, Mode, Quota, Task, Tile};
 pub use turn::{TurnReport, end_turn};

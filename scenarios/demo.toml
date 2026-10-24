@@ -13,8 +13,10 @@ name = "邶"
 owner = "player"
 manager = "player"
 totem = "玄鸟"
-resources = ["farmland", "water", "forest", "salt_pond", "copper_mine"]
-buildings = { foundry = 1 }
+tiles = { farmland = 4, water = 1, forest = 1, salt_pond = 1, copper_mine = 1 }
+# 官营冶厂给府库铸兵器，民营冶厂供工匠自己冶铜
+guan_buildings = { foundry = 1 }
+min_buildings = { foundry = 1 }
 treasury = { grain = 20, salt = 5, bronze = 40, hide = 10, gui = 2 }
 private_wealth = { grain = 16, salt = 7 }
 tax_rate = 0.1
@@ -58,6 +60,22 @@ size = 10
 skills = ["shi", "ritual_craft"]
 culture = 300
 happiness = 650
+
+[[cities.groups]]
+key = "shangjia"
+name = "商贾"
+size = 15
+skills = ["commerce"]
+culture = 100
+happiness = 600
+
+[[cities.groups]]
+key = "hegong"
+name = "河工"
+size = 10
+skills = ["water", "farming"]
+culture = 90
+happiness = 600
 
 [[cities.officials]]
 key = "jia"
@@ -104,5 +122,5 @@ workers = { xishi = 30 }
 [[cities.assignments]]
 key = "wall"
 shi = "ding"
-task = { kind = "construct", building = "city_wall" }
+task = { kind = "construct", building = "city_wall", mode = "guan", on = "farmland" }
 workers = { nanli = 35 }
