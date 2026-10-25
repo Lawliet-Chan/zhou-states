@@ -20,6 +20,8 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub seasons: Vec<String>,
+    /// 每季几个回合（月）
+    pub months_per_season: u32,
     pub population: PopulationConfig,
     pub happiness: HappinessConfig,
     pub shi: ShiConfig,
@@ -30,6 +32,9 @@ pub struct Config {
     pub learning: LearningConfig,
     pub loyalty: LoyaltyConfig,
     pub quota: QuotaConfig,
+    pub fief: FiefConfig,
+    pub neighbor: NeighborConfig,
+    pub passage: PassageConfig,
     pub reclaim: ReclaimConfig,
     pub goods: BTreeMap<String, GoodDef>,
     pub skills: BTreeMap<String, SkillDef>,
@@ -74,6 +79,10 @@ pub struct HappinessConfig {
     pub wealth_bonus: f64,
     pub wealth_full_per_person: f64,
     pub crowding_penalty: f64,
+    /// 会这项技能的人在农忙时被调去做别的工事，额外降低愉悦度
+    pub busy_skill: String,
+    /// 各季的农忙代价：整群人都被调走时每回合额外降低的愉悦度（按调走比例折算）
+    pub busy_penalty: Vec<f64>,
     pub min_output_mult: f64,
     pub max_output_mult: f64,
 }
@@ -148,7 +157,43 @@ pub struct LoyaltyConfig {
     pub min_output: f64,
 }
 
-/// 规定任务：每年冬季结算，影响所有者对管理者的信任。
+/// 通行权。
+#[derive(Debug, Clone, Deserialize)]
+pub struct PassageConfig {
+    /// 赠与、交易通行权时不写期限，默认给这么多回合
+    pub default_turns: u32,
+}
+
+/// 邻城增益：同一个所有者的城离得近，产出都会增加。
+#[derive(Debug, Clone, Deserialize)]
+pub struct NeighborConfig {
+    /// 两座城的治所相距不超过这么多格，算邻城
+    pub range: u32,
+    /// 每有一座邻城，产出增加的比例
+    pub bonus: f64,
+    /// 增加的比例的上限
+    pub max: f64,
+}
+
+/// 封授与纳贡。
+#[derive(Debug, Clone, Deserialize)]
+pub struct FiefConfig {
+    /// 封君没有指定纳贡时，每年年末自动纳贡：府库当年总产出的这个比例
+    pub auto_rate: f64,
+    /// 指定的纳贡总价值超过府库一年总产出价值的这个比例，就算过火，封臣可以拒绝
+    pub excessive_ratio: f64,
+    pub hostility_max: f64,
+    /// 过火的纳贡每回合给封地百姓增加的敌视：要的是上限的两倍时增加这么多，按超出的比例折算，最多两倍
+    pub hostility_gain: f64,
+    /// 没有过火的纳贡时，敌视每回合消退的量
+    pub hostility_decay: f64,
+    /// 封臣风评低于这个值，可以作为征讨的理由
+    pub low_reputation: f64,
+    /// 合理的纳贡连续这么多年没交够，可以作为征讨的理由
+    pub shortfall_years: u32,
+}
+
+/// 规定任务：每年年末结算，影响所有者对管理者的信任。
 #[derive(Debug, Clone, Deserialize)]
 pub struct QuotaConfig {
     /// 人物之间信任的初始值和上限
@@ -197,6 +242,8 @@ pub struct SkillDef {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TerrainDef {
     pub name: String,
+    /// 手画地图时代表这种地形的字
+    pub symbol: String,
     /// 每块地能居住的人口
     pub housing: u32,
     /// 每块地能容纳劳作的人数
@@ -225,6 +272,8 @@ pub struct RecipeDef {
     pub inputs: Inventory,
     pub outputs: Inventory,
     pub season_mult: Vec<f64>,
+    /// 播种的季节：这一季干这一行的人是在播种，记下种了多少；其他季节收成不超过播种量
+    pub sowing_season: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -348,6 +397,11 @@ impl Config {
         self.goods.get(id).map_or(id, |g| g.name.as_str())
     }
 
+    /// 一年的回合数
+    pub fn turns_per_year(&self) -> u32 {
+        self.seasons.len() as u32 * self.months_per_season
+    }
+
     pub fn skill_name<'a>(&'a self, id: &'a str) -> &'a str {
         self.skills.get(id).map_or(id, |s| s.name.as_str())
     }
@@ -357,6 +411,31 @@ impl Config {
         let seasons = self.seasons.len();
         if seasons == 0 {
             return invalid("seasons 不能为空".into());
+        }
+        let mut symbols = std::collections::BTreeSet::new();
+        for (id, terrain) in &self.terrains {
+            if terrain.symbol.split_whitespace().count() != 1 || terrain.symbol == "·" || !symbols.insert(&terrain.symbol) {
+                return invalid(format!("地形「{id}」的 symbol 必须是一个不含空格、不重复、不是「·」的符号"));
+            }
+        }
+        if self.happiness.busy_penalty.len() != seasons {
+            return invalid("happiness.busy_penalty 长度必须等于季节数".into());
+        }
+        if !self.skills.contains_key(&self.happiness.busy_skill) {
+            return invalid(format!("happiness.busy_skill「{}」不在 skills 中", self.happiness.busy_skill));
+        }
+        let f = &self.fief;
+        if !(0.0..=1.0).contains(&f.auto_rate) || f.excessive_ratio <= 0.0 || f.hostility_max <= 0.0 {
+            return invalid("fief.auto_rate 必须在 0 到 1 之间，excessive_ratio 和 hostility_max 必须大于 0".into());
+        }
+        if self.neighbor.bonus < 0.0 || self.neighbor.max < 0.0 {
+            return invalid("neighbor.bonus 和 neighbor.max 不能为负".into());
+        }
+        if self.passage.default_turns == 0 {
+            return invalid("passage.default_turns 不能为 0".into());
+        }
+        if self.months_per_season == 0 {
+            return invalid("months_per_season 不能为 0".into());
         }
         if self.population.specialization.len() != self.population.max_skills {
             return invalid("population.specialization 的长度必须等于 max_skills".into());
@@ -441,6 +520,9 @@ impl Config {
             }
             if recipe.season_mult.len() != seasons {
                 return invalid(format!("配方「{id}」的 season_mult 长度必须等于季节数"));
+            }
+            if recipe.sowing_season.is_some_and(|s| s >= seasons) {
+                return invalid(format!("配方「{id}」的 sowing_season 超出季节数"));
             }
             check_goods(&recipe.inputs, &format!("配方「{id}」"))?;
             check_goods(&recipe.outputs, &format!("配方「{id}」"))?;

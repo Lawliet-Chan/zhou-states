@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
-use zhou_core::turn::{AssignmentReport, CityReport};
-use zhou_core::{Building, Config, Id, Inventory, Mode, Task, TurnReport, end_turn, load_scenario};
+use zhou_core::turn::{AssignmentReport, CellReport, CityReport};
+use zhou_core::{Building, Config, Hex, Id, Inventory, Mode, Task, TurnReport, end_turn, load_scenario};
 
 #[derive(Parser)]
 #[command(about = "结算剧本若干回合并打印报告")]
@@ -18,7 +18,7 @@ struct Args {
     #[arg(long, default_value = "config/balance.toml")]
     config: PathBuf,
     /// 结算的回合数
-    #[arg(long, default_value_t = 8)]
+    #[arg(long, default_value_t = 12)]
     turns: u32,
     /// 以 JSON 输出全部报告，便于用其他工具分析
     #[arg(long)]
@@ -46,23 +46,85 @@ fn main() -> ExitCode {
     if args.json {
         println!("{}", serde_json::to_string_pretty(&reports).expect("reports serialize"));
     } else {
+        if let Some(first) = reports.first() {
+            print_map(first, &config);
+        }
         for report in &reports {
             print_report(report, &config);
+        }
+        if let Some(last) = reports.last().filter(|_| reports.len() > 1) {
+            print_map(last, &config);
         }
     }
     ExitCode::SUCCESS
 }
 
+/// 左边画地形，右边画归属：城市用城名的第一个字，治所加方括号，野地为「·」。奇数行向右缩进半格。
+fn print_map(report: &TurnReport, config: &Config) {
+    let offset = |pos: Hex| pos.to_offset();
+    let (Some(min_col), Some(max_col)) =
+        (report.map.iter().map(|c| offset(c.pos).0).min(), report.map.iter().map(|c| offset(c.pos).0).max())
+    else {
+        return;
+    };
+    let (min_row, max_row) = (
+        report.map.iter().map(|c| offset(c.pos).1).min().unwrap_or(0),
+        report.map.iter().map(|c| offset(c.pos).1).max().unwrap_or(0),
+    );
+    let cells: BTreeMap<(i32, i32), &CellReport> = report.map.iter().map(|c| (offset(c.pos), c)).collect();
+    let mark = |city: Id| {
+        report.cities.iter().find(|c| c.id == city).and_then(|c| c.name.chars().next()).unwrap_or('?')
+    };
+    let seats: Vec<Hex> = report.cities.iter().map(|c| c.seat).collect();
+    println!("══ 地图 ══");
+    for row in min_row..=max_row {
+        let indent = if row & 1 == 1 { "  " } else { "" };
+        let (mut terrain, mut owner) = (indent.to_string(), indent.to_string());
+        for col in min_col..=max_col {
+            match cells.get(&(col, row)) {
+                Some(cell) => {
+                    let symbol = config.terrains.get(&cell.terrain).map_or("?", |t| t.symbol.as_str());
+                    terrain += &format!("{symbol}  ");
+                    owner += &match cell.city {
+                        Some(city) if seats.contains(&cell.pos) => format!("[{}]", mark(city)),
+                        Some(city) => format!(" {} ", mark(city)),
+                        None => " ·  ".into(),
+                    };
+                }
+                None => {
+                    terrain += "    ";
+                    owner += "    ";
+                }
+            }
+        }
+        println!("  {terrain}    {owner}");
+    }
+    println!();
+}
+
 fn print_report(report: &TurnReport, config: &Config) {
-    println!("══ 第 {} 年 {} ══", report.year, report.season);
+    println!("══ 第 {} 年 {} · {} 月 ══", report.year, report.season, report.month);
     let name_of = |id: Option<Id>| {
         id.and_then(|id| report.characters.iter().find(|c| c.id == id)).map_or("无", |c| c.name.as_str())
     };
+    let country_of = |id: Option<Id>| {
+        id.and_then(|id| report.countries.iter().find(|c| c.id == id)).map_or("无国籍", |c| c.name.as_str())
+    };
     for city in &report.cities {
-        print_city(city, config, &name_of);
+        print_city(city, config, &name_of, &country_of);
     }
     for c in &report.characters {
-        let mut line = format!("  人物 {}（{}）风评 {:.0}", c.name, c.rank, c.reputation);
+        let city_name = |id: Option<Id>| {
+            id.and_then(|id| report.cities.iter().find(|c| c.id == id)).map_or("无处可待", |c| c.name.as_str())
+        };
+        let mut line = format!(
+            "  人物 {}（{} · {}）在{}  风评 {:.0}",
+            c.name,
+            country_of(c.nationality),
+            c.rank,
+            city_name(c.location),
+            c.reputation
+        );
         if c.private_store.iter().next().is_some() {
             line += &format!("  私库：{}", format_inventory(&c.private_store, config));
         }
@@ -77,7 +139,12 @@ fn print_report(report: &TurnReport, config: &Config) {
     println!();
 }
 
-fn print_city<'a>(city: &CityReport, config: &Config, name_of: &dyn Fn(Option<Id>) -> &'a str) {
+fn print_city<'a>(
+    city: &CityReport,
+    config: &Config,
+    name_of: &dyn Fn(Option<Id>) -> &'a str,
+    country_of: &dyn Fn(Option<Id>) -> &'a str,
+) {
     let building_name = |b: &Building| {
         let mode = if config.is_workplace(&b.kind) { mode_name(b.mode) } else { "" };
         format!("{mode}{}", config.buildings.get(&b.kind).map_or(b.kind.as_str(), |d| d.name.as_str()))
@@ -88,8 +155,10 @@ fn print_city<'a>(city: &CityReport, config: &Config, name_of: &dyn Fn(Option<Id
     }
     let buildings: Vec<String> = counts.iter().map(|(name, n)| format!("{name}×{n}")).collect();
     println!(
-        "  【{}】人口 {}/{}  士人 {}（空闲 {}）  建筑 {}",
+        "  【{}】{}{}  人口 {}/{}  士人 {}（空闲 {}）  建筑 {}",
         city.name,
+        country_of(city.country),
+        if city.neighbor_bonus > 0.0 { format!("  邻城增益 +{:.0}%", city.neighbor_bonus * 100.0) } else { String::new() },
         city.population,
         city.housing,
         city.officials,
@@ -110,6 +179,37 @@ fn print_city<'a>(city: &CityReport, config: &Config, name_of: &dyn Fn(Option<Id
     }
     let tiles: Vec<String> = tiles.iter().map(|(name, n)| format!("{name}×{n}")).collect();
     let mut rule = format!("    所有者 {}  管理者 {}", name_of(city.owner), name_of(city.manager));
+    if city.fief_offer.is_some() {
+        rule += &format!("（已封授 {}，待答复）", name_of(city.fief_offer));
+    }
+    if city.liege.is_some() {
+        rule += &format!("  封君 {}", name_of(city.liege));
+        rule += &match &city.tribute {
+            None => format!("  纳贡：按例纳府库产出的 {:.0}%", config.fief.auto_rate * 100.0),
+            Some(t) => {
+                let progress: Vec<String> = t
+                    .goods
+                    .iter()
+                    .map(|(g, n)| format!("{} {:.1}/{:.0}", config.good_name(g), t.delivered.get(g), n))
+                    .collect();
+                let note = match (city.tribute_excessive, t.refused) {
+                    (_, true) => "（过火，已拒绝）",
+                    (true, false) => "（过火）",
+                    _ => "",
+                };
+                format!("  纳贡：{}{note}", progress.join(" · "))
+            }
+        };
+        if !city.grievances.is_empty() {
+            let reasons: Vec<String> = city.grievances.iter().map(|g| g.describe()).collect();
+            rule += &format!("  可征讨：{}", reasons.join("、"));
+        }
+    }
+    if !city.passage.is_empty() {
+        let holders: Vec<String> =
+            city.passage.iter().map(|(id, left)| format!("{}（还剩 {left} 回合）", name_of(Some(*id)))).collect();
+        rule += &format!("  通行权：{}", holders.join("、"));
+    }
     if city.manager_offer.is_some() {
         rule += &format!("（已任命 {}，待答复）", name_of(city.manager_offer));
     }
@@ -140,8 +240,9 @@ fn print_city<'a>(city: &CityReport, config: &Config, name_of: &dyn Fn(Option<Id
     println!("    民间：{}", format_inventory(&city.private_wealth, config));
     for g in city.groups.iter().filter(|g| g.size > 0) {
         let skills: Vec<&str> = g.skills.iter().map(|s| config.skill_name(s)).collect();
+        let hostility = if city.liege.is_some() { format!("  敌视 {:>4.0}", g.hostility) } else { String::new() };
         println!(
-            "    {:<8} {:>4} 人  受管 {:>3}  愉悦 {:>4.0}  文化 {:>4.0}  忠诚 {:>4.0}  {}",
+            "    {:<8} {:>4} 人  受管 {:>3}  愉悦 {:>4.0}  文化 {:>4.0}  忠诚 {:>4.0}{hostility}  {}",
             g.name,
             g.size,
             g.managed,
@@ -180,9 +281,9 @@ fn describe_task(a: &AssignmentReport, city: &CityReport, config: &Config) -> St
             }
             None => format!("营建{building}"),
         },
-        Task::Reclaim { terrain } => match config.terrains.get(terrain) {
-            Some(t) => format!("开垦{}（{:.0}/{:.0}）", t.name, progress, t.reclaim_labor),
-            None => format!("开垦{terrain}"),
+        Task::Reclaim { at, terrain } => match config.terrains.get(terrain) {
+            Some(t) => format!("开垦 {at} 的{}（{:.0}/{:.0}）", t.name, progress, t.reclaim_labor),
+            None => format!("开垦 {at} 的{terrain}"),
         },
         Task::Improve { tile, improvement } => {
             let terrain = terrain_of(*tile);

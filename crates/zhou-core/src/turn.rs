@@ -8,30 +8,66 @@
 //! 7. 愉悦度
 //! 8. 人口增减（受居住上限限制）
 //! 9. 礼法检查：列鼎制度、城市面积
-//! 10. 冬季结算规定任务
+//! 10. 年末（冬季最后一个月）结算规定任务
 
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 
 use crate::config::{Config, Pool, RecipeDef};
+use crate::fief::{self, Grievance};
 use crate::inventory::Inventory;
-use crate::state::{Building, City, CityStatus, GameState, Id, JobSlot, Learning, Mode, PopGroup, Quota, Task, Tile};
+use crate::map::Hex;
+use crate::state::{Building, City, CityStatus, Country, GameState, Id, JobSlot, Learning, Mode, PopGroup, Quota, Task, Tile, Tribute};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TurnReport {
     pub turn: u32,
     pub year: u32,
+    /// 一年中的第几个月，从 1 开始
+    pub month: u32,
     pub season: String,
     pub events: Vec<String>,
+    /// 整张地图：每格的地形和所属城市
+    pub map: Vec<CellReport>,
     pub cities: Vec<CityReport>,
     pub characters: Vec<CharacterReport>,
+    pub countries: Vec<Country>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CellReport {
+    /// 轴向坐标
+    pub pos: Hex,
+    pub terrain: String,
+    /// 野地为 None
+    pub city: Option<Id>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CityReport {
     pub id: Id,
     pub name: String,
+    /// 治所所在的格子
+    pub seat: Hex,
+    /// 隶属的国家
+    pub country: Option<Id>,
+    /// 封君
+    pub liege: Option<Id>,
+    /// 未答复的封授
+    pub fief_offer: Option<Id>,
+    /// 封君指定的纳贡，None 为按比例自动纳贡
+    pub tribute: Option<Tribute>,
+    /// 这份纳贡是否过火
+    pub tribute_excessive: bool,
+    /// 封君征讨封臣的理由
+    pub grievances: Vec<Grievance>,
+    /// 府库今年的总产出
+    pub income: Inventory,
+    /// 通行权：人物 id → 之后还剩几回合
+    pub passage: BTreeMap<Id, u32>,
+    /// 邻城增益：产出增加的比例
+    pub neighbor_bonus: f64,
     pub owner: Option<Id>,
     pub manager: Option<Id>,
     /// 未答复的管理权任命
@@ -54,6 +90,7 @@ pub struct CityReport {
 #[derive(Debug, Clone, Serialize)]
 pub struct TileReport {
     pub id: Id,
+    pub pos: Hex,
     pub terrain: String,
     pub improvements: BTreeMap<String, u32>,
     pub buildings: Vec<Building>,
@@ -88,6 +125,8 @@ pub struct GroupReport {
     pub happiness: f64,
     pub culture: f64,
     pub loyalty: f64,
+    /// 对封君的敌视
+    pub hostility: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,6 +138,9 @@ pub struct CharacterReport {
     pub private_store: Inventory,
     /// 人物 id → 对他的信任
     pub trust: BTreeMap<Id, f64>,
+    pub nationality: Option<Id>,
+    /// 所在的城市
+    pub location: Option<Id>,
 }
 
 /// 本回合每群人的结算记录。
@@ -171,27 +213,44 @@ impl Jobs {
 pub fn end_turn(state: &mut GameState, config: &Config) -> TurnReport {
     let season = state.season_index(config);
     let year = state.year(config);
+    let month = state.month(config);
     let mut events = Vec::new();
+    expire_offers(state, &mut events);
 
     let mut jobs = BTreeMap::new();
+    let mut claims = Vec::new();
+    let calendar = Calendar { season, month, first_month: state.turn.is_multiple_of(config.months_per_season) };
+    let neighbor: BTreeMap<Id, f64> = state.cities.values().map(|c| (c.id, state.neighbor_mult(config, c))).collect();
     let next_id = &mut state.next_id;
     for city in state.cities.values_mut() {
-        jobs.insert(city.id, resolve_city(city, config, season, next_id, &mut events));
+        let neighbor = neighbor[&city.id];
+        jobs.insert(city.id, resolve_city(city, config, calendar, neighbor, next_id, &mut claims, &mut events));
     }
+    settle_claims(state, claims, &mut events);
     check_ritual(state, config, &mut events);
-    if season + 1 == config.seasons.len() {
+    check_countries(state, &mut events);
+    state.settle_locations();
+    if state.is_year_end(config) {
+        settle_tributes(state, config, &mut events);
+        for city in state.cities.values_mut() {
+            city.last_income = Some(std::mem::take(&mut city.income));
+        }
         settle_quotas(state, config, &mut events);
     }
+    expire_passage(state, &mut events);
 
     let report = TurnReport {
         turn: state.turn,
         year,
+        month,
         season: config.seasons[season].clone(),
         events,
+        map: map_report(state),
+        countries: state.countries.values().cloned().collect(),
         cities: state
             .cities
             .values()
-            .map(|c| city_report(c, config, jobs.remove(&c.id).unwrap_or_default()))
+            .map(|c| city_report(state, c, config, month, jobs.remove(&c.id).unwrap_or_default()))
             .collect(),
         characters: state
             .characters
@@ -203,6 +262,8 @@ pub fn end_turn(state: &mut GameState, config: &Config) -> TurnReport {
                 reputation: c.reputation,
                 private_store: c.private_store.clone(),
                 trust: c.trust.clone(),
+                nationality: c.nationality,
+                location: c.location,
             })
             .collect(),
     };
@@ -210,13 +271,26 @@ pub fn end_turn(state: &mut GameState, config: &Config) -> TurnReport {
     report
 }
 
+/// 当前回合在一年中的位置。
+#[derive(Clone, Copy)]
+struct Calendar {
+    season: usize,
+    /// 一年中的第几个月，从 1 开始
+    month: u32,
+    /// 是否是这一季的第一个月
+    first_month: bool,
+}
+
 fn resolve_city(
     city: &mut City,
     config: &Config,
-    season: usize,
+    calendar: Calendar,
+    neighbor: f64,
     next_id: &mut Id,
+    claims: &mut Vec<Claim>,
     events: &mut Vec<String>,
 ) -> Vec<JobReport> {
+    let Calendar { season, month, first_month } = calendar;
     clamp_assignments(city, events);
     let city_mult = city.efficiency(config);
     let mut ledgers: BTreeMap<Id, Ledger> = city.groups.keys().map(|id| (*id, Ledger::default())).collect();
@@ -244,13 +318,14 @@ fn resolve_city(
             events.push(format!("{}：{}对管理者不够忠诚，{} 人罢工，回去自己干活", city.name, city.groups[group].name, n));
         }
     }
+    // 先排好每一份劳作占到的位置，播种和收成要看全城干这一行的总人数
+    let mut batches: Vec<(&String, Id, u32, f64, Mode)> = Vec::new();
     for a in &assignments {
         if let Task::Produce { recipe, mode } = &a.task {
-            let def = &config.recipes[recipe];
             for group in a.workers.keys() {
                 let count = working[&(a.id, *group)];
                 let effective = jobs.take(config, recipe, count, *mode);
-                produce(city, config, def, *group, count, effective, *mode, season, city_mult, &mut ledgers);
+                batches.push((recipe, *group, count, effective, *mode));
             }
         }
     }
@@ -266,9 +341,31 @@ fn resolve_city(
             let def = &config.recipes[recipe];
             if can_make(city, config, def, &city.groups[group]) {
                 let effective = jobs.take(config, recipe, unmanaged, Mode::Min);
-                produce(city, config, def, *group, unmanaged, effective, Mode::Min, season, city_mult, &mut ledgers);
+                batches.push((recipe, *group, unmanaged, effective, Mode::Min));
             }
         }
+    }
+    // 播种季记下种了多少；其他季节收成不超过播种量，多出来的人白忙
+    let mut harvest: BTreeMap<&String, f64> = BTreeMap::new();
+    for (recipe, def) in &config.recipes {
+        let Some(sowing) = def.sowing_season else { continue };
+        let total: f64 = batches.iter().filter(|b| b.0 == recipe).map(|b| b.3).sum();
+        if season == sowing {
+            if first_month {
+                city.sown.insert(recipe.clone(), 0.0);
+            }
+            *city.sown.entry(recipe.clone()).or_insert(0.0) += total / config.months_per_season as f64;
+        } else if let Some(sown) = city.sown.get(recipe)
+            && total > *sown
+        {
+            harvest.insert(recipe, sown / total);
+        }
+    }
+    for (recipe, group, count, effective, mode) in batches {
+        let def = &config.recipes[recipe];
+        let effective = effective * harvest.get(recipe).copied().unwrap_or(1.0);
+        // 邻城增益只加在产出上，不加在营建、开垦的进度上
+        produce(city, config, def, group, count, effective, mode, season, city_mult * neighbor, &mut ledgers);
     }
     let job_report = jobs.report();
     for job in &job_report {
@@ -293,7 +390,7 @@ fn resolve_city(
                 let def = &config.improvements[improvement];
                 (def.labor, &def.season_mult, &def.name)
             }
-            Task::Reclaim { terrain } => {
+            Task::Reclaim { terrain, .. } => {
                 let def = &config.terrains[terrain];
                 (def.reclaim_labor, &config.reclaim.season_mult, &def.name)
             }
@@ -328,11 +425,8 @@ fn resolve_city(
                     events.push(format!("{}：{}{}完成，现为 {} 级", city.name, terrain, name, level));
                 }
             }
-            Task::Reclaim { terrain } => {
-                let id = *next_id;
-                *next_id += 1;
-                city.tiles.insert(id, Tile::new(id, terrain.clone()));
-                events.push(format!("{}：开垦出一块{}", city.name, name));
+            Task::Reclaim { at, terrain } => {
+                claims.push(Claim { city: city.id, at: *at, terrain: terrain.clone(), name: name.clone() });
             }
             _ => unreachable!("only construct, improve and reclaim reach here"),
         }
@@ -381,6 +475,7 @@ fn resolve_city(
             for (good, income) in ledger.income.iter() {
                 let taken = city.private_wealth.take(good, income * city.tax_rate * share);
                 city.treasury.add(good, taken);
+                city.income.add(good, taken);
             }
         }
     }
@@ -473,7 +568,14 @@ fn resolve_city(
     } else {
         0.0
     };
+    // 封君要的纳贡过火，封地百姓敌视封君；不过火时慢慢消退
+    let f = &config.fief;
+    let hostility_delta = match fief::overreach(city, config, month) {
+        Some(overreach) => f.hostility_gain * overreach.min(2.0),
+        None => -f.hostility_decay,
+    };
     for group in city.groups.values_mut() {
+        group.hostility = (group.hostility + hostility_delta).clamp(0.0, f.hostility_max);
         if group.size == 0 {
             continue;
         }
@@ -486,6 +588,16 @@ fn resolve_city(
         delta -= h.tax_penalty * city.tax_rate * taxed_share;
         delta -= h.hunger_penalty * ledger.unfed;
         delta -= h.crowding_penalty * crowding;
+        // 农忙时被调去做别的工事
+        if h.busy_penalty[season] > 0.0 && group.has_skill(&h.busy_skill) {
+            let taken: u32 = city
+                .assignments
+                .values()
+                .filter(|a| a.task.uses_labor() && !is_busy_work(&a.task, config, &h.busy_skill))
+                .filter_map(|a| a.workers.get(&group.id))
+                .sum();
+            delta -= h.busy_penalty[season] * (taken as f64 / size).min(1.0);
+        }
         if sacrificed {
             delta += h.sacrifice_bonus;
         }
@@ -583,9 +695,9 @@ fn produce(
     }
 
     // 官营的原料和产出都在府库，民营的在全城共有的民间财富中
-    let stock = match mode {
-        Mode::Guan => &mut city.treasury,
-        Mode::Min => &mut city.private_wealth,
+    let (stock, mut year_income) = match mode {
+        Mode::Guan => (&mut city.treasury, Some(&mut city.income)),
+        Mode::Min => (&mut city.private_wealth, None),
     };
     // 原料不足时按比例减产
     let mut factor: f64 = 1.0;
@@ -609,8 +721,9 @@ fn produce(
         };
         for (good, amount) in made {
             stock.add(good, amount);
-            if mode == Mode::Min {
-                ledger.income.add(good, amount);
+            match &mut year_income {
+                Some(income) => income.add(good, amount),
+                None => ledger.income.add(good, amount),
             }
         }
     }
@@ -665,6 +778,7 @@ fn clamp_assignments(city: &mut City, events: &mut Vec<String>) {
 /// 回到上限以内后又超出，算作新的僭越，再扣一次。
 fn check_ritual(state: &mut GameState, config: &Config, events: &mut Vec<String>) {
     let ritual = &config.ritual;
+    let turn = state.turn;
     for character in state.characters.values_mut() {
         let owned: Vec<&City> = state.cities.values().filter(|c| c.owner == Some(character.id)).collect();
         let dings: u32 = owned
@@ -675,6 +789,7 @@ fn check_ritual(state: &mut GameState, config: &Config, events: &mut Vec<String>
         let excess = dings.saturating_sub(limit);
         if excess > character.punished_ding_excess {
             character.reputation -= (excess - character.punished_ding_excess) as f64 * ritual.excess_reputation_penalty;
+            character.usurped_turn = Some(turn);
             events.push(format!("{}：拥有鼎 {} 只，超出身份上限 {} 只，僭越，风评下降", character.name, dings, limit));
         }
         character.punished_ding_excess = excess;
@@ -687,6 +802,7 @@ fn check_ritual(state: &mut GameState, config: &Config, events: &mut Vec<String>
             let before = character.punished_tile_excess.get(&city.id).copied().unwrap_or(0);
             if excess > before {
                 character.reputation -= (excess - before) as f64 * ritual.excess_tile_penalty;
+                character.usurped_turn = Some(turn);
                 events.push(format!(
                     "{}：{}有地 {} 块，超出身份上限 {} 块，僭越，风评下降",
                     character.name, city.name, tiles, tile_limit
@@ -700,7 +816,139 @@ fn check_ritual(state: &mut GameState, config: &Config, events: &mut Vec<String>
     }
 }
 
-/// 冬季结算规定任务：看全年累计上缴的物资交够没有，调整所有者对管理者的信任，然后清零重新累计。
+/// 赠与、索取、交易、任命管理者、封授都只在发起的当回合有效：回合结束时还没答复就自动作废。
+fn expire_offers(state: &mut GameState, events: &mut Vec<String>) {
+    let name = |id: Id| state.characters.get(&id).map_or("?", |c| c.name.as_str());
+    for deal in state.deals.values() {
+        events.push(format!("{}向{}提出的{}没有在当回合答复，已作废", name(deal.from), name(deal.to), deal.kind_name()));
+    }
+    for city in state.cities.values() {
+        if let Some(to) = city.manager_offer {
+            events.push(format!("{}：任命{}为管理者，没有在当回合答复，已作废", city.name, name(to)));
+        }
+        if let Some(to) = city.fief_offer {
+            events.push(format!("{}：封授给{}，没有在当回合答复，已作废", city.name, name(to)));
+        }
+    }
+    state.deals.clear();
+    for city in state.cities.values_mut() {
+        city.manager_offer = None;
+        city.fief_offer = None;
+    }
+}
+
+/// 通行权到这一回合为止的，回合结束时到期。
+fn expire_passage(state: &mut GameState, events: &mut Vec<String>) {
+    let next = state.turn + 1;
+    for city in state.cities.values_mut() {
+        let expired: Vec<Id> = city.passage.iter().filter(|(_, until)| **until <= next).map(|(who, _)| *who).collect();
+        for who in expired {
+            city.passage.remove(&who);
+            let name = state.characters.get(&who).map_or("?", |c| c.name.as_str());
+            events.push(format!("{}：{}的通行权到期", city.name, name));
+        }
+    }
+}
+
+/// 一个国家的城市全部被攻灭，这个国家就灭亡了，国人都成了无国籍。
+fn check_countries(state: &mut GameState, events: &mut Vec<String>) {
+    let alive: Vec<Id> = state.cities.values().filter_map(|c| state.country_of(c)).collect();
+    let fallen: Vec<Id> = state.countries.keys().copied().filter(|id| !alive.contains(id)).collect();
+    for id in fallen {
+        let country = state.countries.remove(&id).expect("country exists");
+        for character in state.characters.values_mut().filter(|c| c.nationality == Some(id)) {
+            character.nationality = None;
+        }
+        events.push(format!("{}已经没有一座城，就此灭亡", country.name));
+    }
+}
+
+/// 年末结算纳贡。封君没有指定纳贡时，自动从府库纳当年总产出的一定比例；
+/// 指定了的看今年纳够没有，合理的纳贡没纳够会成为征讨的理由。
+fn settle_tributes(state: &mut GameState, config: &Config, events: &mut Vec<String>) {
+    let months = config.turns_per_year();
+    for city in state.cities.values_mut() {
+        let Some(liege_id) = city.liege else { continue };
+        if city.status == CityStatus::Occupied {
+            continue;
+        }
+        let liege_name = state.characters.get(&liege_id).map_or_else(String::new, |c| c.name.clone());
+        let excessive = fief::overreach(city, config, months).is_some();
+        let Some(tribute) = &mut city.tribute else {
+            let mut paid = Inventory::default();
+            for (good, amount) in city.income.iter() {
+                paid.add(good, city.treasury.take(good, amount * config.fief.auto_rate));
+            }
+            city.tribute_shortfall_years = 0;
+            if let Some(liege) = state.characters.get_mut(&liege_id) {
+                liege.private_store.add_all(&paid);
+            }
+            events.push(format!("{}：按例向{}纳贡 {}", city.name, liege_name, describe(&paid, config)));
+            continue;
+        };
+        let required = config.value_of(&tribute.goods);
+        let credited: f64 = tribute
+            .goods
+            .iter()
+            .map(|(g, n)| config.goods.get(g).map_or(0.0, |d| d.value) * tribute.delivered.get(g).min(*n))
+            .sum();
+        tribute.delivered = Inventory::default();
+        if tribute.refused {
+            events.push(format!("{}：拒绝了{}过火的纳贡", city.name, liege_name));
+        } else if credited + 1e-9 >= required {
+            city.tribute_shortfall_years = 0;
+            events.push(format!("{}：今年向{}纳贡已足", city.name, liege_name));
+        } else if excessive {
+            events.push(format!("{}：{}要的纳贡过火，今年没有纳够", city.name, liege_name));
+        } else {
+            city.tribute_shortfall_years += 1;
+            events.push(format!(
+                "{}：今年向{}纳贡只纳了 {:.0}%，已连续 {} 年不足",
+                city.name,
+                liege_name,
+                credited / required.max(1e-9) * 100.0,
+                city.tribute_shortfall_years
+            ));
+        }
+    }
+}
+
+fn describe(goods: &Inventory, config: &Config) -> String {
+    let parts: Vec<String> =
+        goods.iter().filter(|(_, n)| **n >= 0.005).map(|(g, n)| format!("{} {n:.2}", config.good_name(g))).collect();
+    if parts.is_empty() { "无".into() } else { parts.join("、") }
+}
+
+/// 是不是本行的农活：种这一行的配方。
+fn is_busy_work(task: &Task, config: &Config, skill: &str) -> bool {
+    matches!(task, Task::Produce { recipe, .. } if config.recipes[recipe].skill == skill)
+}
+
+/// 开垦完成、等待划入城市的一格。
+struct Claim {
+    city: Id,
+    at: Hex,
+    terrain: String,
+    name: String,
+}
+
+/// 各城都结算完后，再把开垦好的格子划进城里。同一回合有两座城开垦同一格时，先结算的城得到它；
+/// 晚了一步的城白费人力。
+fn settle_claims(state: &mut GameState, claims: Vec<Claim>, events: &mut Vec<String>) {
+    for claim in claims {
+        if let Some(owner) = state.city_at(claim.at) {
+            let (owner, city) = (&state.cities[&owner].name, &state.cities[&claim.city].name);
+            events.push(format!("{city}：{} 的{}被{owner}抢先占了，开垦白费", claim.at, claim.name));
+            continue;
+        }
+        let id = state.alloc_id();
+        let city = state.cities.get_mut(&claim.city).expect("claiming city exists");
+        city.tiles.insert(id, Tile::new(id, claim.at, claim.terrain));
+        events.push(format!("{}：开垦出 {} 的一块{}", city.name, claim.at, claim.name));
+    }
+}
+
+/// 年末结算规定任务：看全年累计上缴的物资交够没有，调整所有者对管理者的信任，然后清零重新累计。
 /// 缺口和超额都按物品价值折算。
 fn settle_quotas(state: &mut GameState, config: &Config, events: &mut Vec<String>) {
     let q = &config.quota;
@@ -733,7 +981,18 @@ fn settle_quotas(state: &mut GameState, config: &Config, events: &mut Vec<String
     }
 }
 
-fn city_report(city: &City, config: &Config, jobs: Vec<JobReport>) -> CityReport {
+fn map_report(state: &GameState) -> Vec<CellReport> {
+    let owners: BTreeMap<Hex, Id> =
+        state.cities.values().flat_map(|c| c.tiles.values().map(move |t| (t.pos, c.id))).collect();
+    state
+        .map
+        .cells
+        .values()
+        .map(|c| CellReport { pos: c.pos, terrain: c.terrain.clone(), city: owners.get(&c.pos).copied() })
+        .collect()
+}
+
+fn city_report(state: &GameState, city: &City, config: &Config, month: u32, jobs: Vec<JobReport>) -> CityReport {
     let assignments = city
         .assignments
         .values()
@@ -749,6 +1008,17 @@ fn city_report(city: &City, config: &Config, jobs: Vec<JobReport>) -> CityReport
     CityReport {
         id: city.id,
         name: city.name.clone(),
+        seat: city.seat,
+        country: state.country_of(city),
+        liege: city.liege,
+        fief_offer: city.fief_offer,
+        tribute: city.tribute.clone(),
+        // 年末结算后今年的产出已经清零，按去年的算
+        tribute_excessive: fief::overreach(city, config, month % config.turns_per_year()).is_some(),
+        grievances: fief::grievances(state, config, city),
+        income: city.income.clone(),
+        passage: city.passage.iter().map(|(who, until)| (*who, until.saturating_sub(state.turn + 1))).collect(),
+        neighbor_bonus: state.neighbor_mult(config, city) - 1.0,
         owner: city.owner,
         manager: city.manager,
         manager_offer: city.manager_offer,
@@ -763,6 +1033,7 @@ fn city_report(city: &City, config: &Config, jobs: Vec<JobReport>) -> CityReport
             .values()
             .map(|t| TileReport {
                 id: t.id,
+                pos: t.pos,
                 terrain: t.terrain.clone(),
                 improvements: t.improvements.clone(),
                 buildings: t.buildings.clone(),
@@ -783,6 +1054,7 @@ fn city_report(city: &City, config: &Config, jobs: Vec<JobReport>) -> CityReport
                 happiness: g.happiness,
                 culture: g.culture,
                 loyalty: g.loyalty,
+                hostility: g.hostility,
             })
             .collect(),
         assignments,

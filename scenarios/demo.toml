@@ -1,19 +1,72 @@
-# 示例剧本：一座小城，玩家既是所有者也是管理者。
+# 示例剧本：四座城。周王是天子，有成周；卫伯是卫国国君。
+# 玩家姬虎是卫国人：邶是卫伯封给他的封地，每年按例纳贡；鄘是他自己的城，交给家宰史伯管、每年上缴粮食。
 # 用 key 互相引用；workers 中的数字是投入的人数。
+
+# 地图：每格写地形的 symbol（见 balance.toml），奇数行向右缩进半格，「·」表示没有格子。
+# owners 一层画出每格属于哪座城（城名的第一个字），「·」是野地，可以从相邻的城开垦进来。
+[map]
+rows = [
+  "林 林 草 耕 耕 林 林 林 玉",
+  " 林 耕 耕 耕 耕 耕 耕 泽 玉",
+  "铜 耕 耕 耕 泽 泽 耕 耕 耕",
+  " 盐 耕 泽 耕 耕 耕 林 耕 林",
+  "盐 林 耕 耕 林 林 耕 耕 草",
+  " 林 林 林 耕 林 铜 耕 草 草",
+]
+owners = [
+  "· · 鄘 鄘 鄘 鄘 · · ·",
+  " · · · 鄘 · · · 卫 卫",
+  "邶 邶 邶 · · · 卫 卫 卫",
+  " 邶 邶 邶 · · · · 卫 ·",
+  "· 邶 邶 · · · 成 成 ·",
+  " · · · · · 成 成 成 ·",
+]
+
+[[countries]]
+key = "zhou"
+name = "周"
+ruler = "king"
+capital = "chengzhou"
+
+[[countries]]
+key = "wei_state"
+name = "卫"
+ruler = "wei_bo"
+capital = "wei"
+
+[[characters]]
+key = "king"
+name = "周王"
+rank = "tianzi"
+reputation = 800
 
 [[characters]]
 key = "player"
 name = "姬虎"
 rank = "nan"
 reputation = 500
+nationality = "wei_state"
+
+[[characters]]
+key = "steward"
+name = "史伯"
+nationality = "wei_state"
+
+[[characters]]
+key = "wei_bo"
+name = "卫伯"
+rank = "bo"
+reputation = 300
 
 [[cities]]
 key = "bei"
 name = "邶"
 owner = "player"
 manager = "player"
+# 卫伯封给姬虎的封地，没有指定纳贡，年末按例纳府库当年产出的一部分
+liege = "wei_bo"
 totem = "玄鸟"
-tiles = { farmland = 4, water = 1, forest = 1, salt_pond = 1, copper_mine = 1 }
+seat = [1, 3]
 # 官营冶厂给府库铸兵器，民营冶厂供工匠自己冶铜
 guan_buildings = { foundry = 1 }
 min_buildings = { foundry = 1 }
@@ -124,3 +177,132 @@ key = "wall"
 shi = "ding"
 task = { kind = "construct", building = "city_wall", mode = "guan", on = "farmland" }
 workers = { nanli = 35 }
+
+# ---------------------------------------------------------------- 鄘：家宰史伯代管，每年上缴 30 粮
+
+[[cities]]
+key = "yong"
+name = "鄘"
+owner = "player"
+manager = "steward"
+totem = "玄鸟"
+seat = [3, 0]
+treasury = { grain = 40, salt = 10 }
+quota = { grain = 30 }
+
+[[cities.groups]]
+key = "yong_farmers"
+name = "鄘农人"
+size = 120
+culture = 80
+happiness = 600
+
+[[cities.groups]]
+key = "yong_herders"
+name = "鄘牧人"
+size = 20
+skills = ["horse_breeding", "hunting"]
+culture = 80
+happiness = 600
+
+[[cities.groups]]
+key = "yong_gentry"
+name = "鄘士族"
+size = 5
+skills = ["shi", "farming"]
+culture = 200
+happiness = 600
+
+[[cities.officials]]
+key = "yong_shi"
+name = "鄘士"
+from_group = "yong_gentry"
+
+[[cities.assignments]]
+key = "yong_tax"
+shi = "yong_shi"
+task = { kind = "collect_tax" }
+workers = { yong_farmers = 30 }
+
+# ---------------------------------------------------------------- 卫：卫伯的城，有玉矿
+
+[[cities]]
+key = "wei"
+name = "卫"
+owner = "wei_bo"
+manager = "wei_bo"
+totem = "白虎"
+treasury = { grain = 60, salt = 20 }
+private_wealth = { grain = 20, salt = 5 }
+
+[[cities.groups]]
+key = "wei_farmers"
+name = "卫农人"
+size = 160
+skills = ["farming", "fishing"]
+culture = 120
+happiness = 600
+
+[[cities.groups]]
+key = "wei_jade"
+name = "卫玉工"
+size = 15
+skills = ["luxury"]
+culture = 150
+happiness = 600
+
+[[cities.groups]]
+key = "wei_gentry"
+name = "卫士族"
+size = 8
+skills = ["shi"]
+culture = 250
+happiness = 650
+
+[[cities.officials]]
+key = "wei_shi"
+name = "卫士"
+from_group = "wei_gentry"
+
+[[cities.assignments]]
+key = "wei_tax"
+shi = "wei_shi"
+task = { kind = "collect_tax" }
+workers = { wei_farmers = 30 }
+
+# ---------------------------------------------------------------- 成周：天子的城
+
+[[cities]]
+key = "chengzhou"
+name = "成周"
+owner = "king"
+manager = "king"
+totem = "周"
+treasury = { grain = 80, salt = 30, bronze = 20 }
+private_wealth = { grain = 20, salt = 10 }
+
+[[cities.groups]]
+key = "zhou_farmers"
+name = "周农人"
+size = 150
+culture = 200
+happiness = 650
+
+[[cities.groups]]
+key = "zhou_gentry"
+name = "周士族"
+size = 12
+skills = ["shi", "ritual_craft"]
+culture = 400
+happiness = 700
+
+[[cities.officials]]
+key = "zhou_shi"
+name = "周士"
+from_group = "zhou_gentry"
+
+[[cities.assignments]]
+key = "zhou_tax"
+shi = "zhou_shi"
+task = { kind = "collect_tax" }
+workers = { zhou_farmers = 30 }

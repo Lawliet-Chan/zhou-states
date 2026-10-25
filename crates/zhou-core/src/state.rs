@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, Pool};
+use crate::deal::Deal;
 use crate::inventory::Inventory;
+use crate::map::{Hex, Map};
 
 /// 所有实体共用一个递增的 id 空间。
 pub type Id = u32;
@@ -14,8 +16,29 @@ pub struct GameState {
     /// 下一个要结算的回合，从 0 开始
     pub turn: u32,
     pub next_id: Id,
+    #[serde(default)]
+    pub map: Map,
     pub characters: BTreeMap<Id, Character>,
     pub cities: BTreeMap<Id, City>,
+    #[serde(default)]
+    pub countries: BTreeMap<Id, Country>,
+    /// 还没答复的赠与、索取、交易
+    #[serde(default)]
+    pub deals: BTreeMap<Id, Deal>,
+}
+
+/// 国家：独立存在，不随某个人物存在或消失。国籍指向国家，城市隶属于所有者国籍所在的国家。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Country {
+    pub id: Id,
+    pub name: String,
+    /// 国君
+    pub ruler: Id,
+    /// 都城
+    pub capital: Option<Id>,
+    /// 国君发布了国战：国内所有的城对本国的人开放通行（等军队做出来后由国战设置）
+    #[serde(default)]
+    pub national_war: bool,
 }
 
 impl GameState {
@@ -25,12 +48,90 @@ impl GameState {
         id
     }
 
+    /// 当前回合所在的季节
+    /// 这一格属于哪座城，野地返回 None
+    /// 城市隶属的国家：所有者的国籍
+    pub fn country_of(&self, city: &City) -> Option<Id> {
+        city.owner.and_then(|o| self.characters.get(&o)).and_then(|c| c.nationality)
+    }
+
+    /// 邻城增益：同一个所有者的其他城，治所相距不超过 `neighbor.range` 格的，每座给这座城的产出加一成，有上限。
+    /// 返回产出的倍数。
+    pub fn neighbor_mult(&self, config: &Config, city: &City) -> f64 {
+        let Some(owner) = city.owner else { return 1.0 };
+        let n = self
+            .cities
+            .values()
+            .filter(|c| c.id != city.id && c.owner == Some(owner) && c.seat.distance(city.seat) <= config.neighbor.range)
+            .count();
+        1.0 + (n as f64 * config.neighbor.bonus).min(config.neighbor.max)
+    }
+
+    /// 人物能待在这座城：城是他自己的；自己一座城都没有时，只能待在他管理的城。
+    pub fn can_stay(&self, who: Id, city: Id) -> bool {
+        let Some(c) = self.cities.get(&city) else { return false };
+        c.owner == Some(who) || (c.manager == Some(who) && !self.cities.values().any(|c| c.owner == Some(who)))
+    }
+
+    /// 所在的城不再能待（城送了人、封了出去、被灭了）或者还没有所在的城时，回到默认的地方：
+    /// 先是自己管理的自己的城，再是自己拥有的城；自己一座城都没有时待在他管理的城；都没有就无处可待。
+    pub fn settle_locations(&mut self) {
+        let ids: Vec<Id> = self.characters.keys().copied().collect();
+        for id in ids {
+            let current = self.characters[&id].location;
+            if current.is_some_and(|c| self.can_stay(id, c)) {
+                continue;
+            }
+            let mut owned = self.cities.values().filter(|c| c.owner == Some(id));
+            let home = owned
+                .clone()
+                .find(|c| c.manager == Some(id))
+                .or_else(|| owned.next())
+                .or_else(|| self.cities.values().find(|c| c.manager == Some(id)))
+                .map(|c| c.id);
+            self.characters.get_mut(&id).expect("listed above").location = home;
+        }
+    }
+
+    /// `who` 的军队能不能经过这一格。野地谁都能走，商旅哪里都能走。城的地：
+    /// - 所有者自己能走，有通行权、还没到期的人能走
+    /// - 国君的军队可以自由出入本国所有的城
+    /// - 国君发布国战时，国内所有的城对本国的人开放
+    ///
+    /// 硬闯就是宣战（等军队做出来后实现）。
+    pub fn can_pass(&self, who: Id, pos: Hex, merchant: bool) -> bool {
+        if merchant {
+            return true;
+        }
+        let Some(city) = self.city_at(pos).and_then(|id| self.cities.get(&id)) else { return true };
+        if city.owner == Some(who) || city.passage.get(&who).is_some_and(|until| self.turn < *until) {
+            return true;
+        }
+        let Some(country) = self.country_of(city).and_then(|id| self.countries.get(&id)) else { return false };
+        country.ruler == who
+            || (country.national_war && self.characters.get(&who).and_then(|c| c.nationality) == Some(country.id))
+    }
+
+    pub fn city_at(&self, pos: Hex) -> Option<Id> {
+        self.cities.values().find(|c| c.tile_at(pos).is_some()).map(|c| c.id)
+    }
+
     pub fn season_index(&self, config: &Config) -> usize {
-        self.turn as usize % config.seasons.len()
+        self.turn as usize / config.months_per_season as usize % config.seasons.len()
+    }
+
+    /// 当前回合是一年中的第几个月，从 1 开始
+    pub fn month(&self, config: &Config) -> u32 {
+        self.turn % config.turns_per_year() + 1
     }
 
     pub fn year(&self, config: &Config) -> u32 {
-        self.turn / config.seasons.len() as u32 + 1
+        self.turn / config.turns_per_year() + 1
+    }
+
+    /// 当前回合是不是一年的最后一个月
+    pub fn is_year_end(&self, config: &Config) -> bool {
+        self.month(config) == config.turns_per_year()
     }
 }
 
@@ -54,6 +155,15 @@ pub struct Character {
     /// 人物 id → 这个人对他的信任，没有记录时为初始值
     #[serde(default)]
     pub trust: BTreeMap<Id, f64>,
+    /// 国籍，None 为无国籍
+    #[serde(default)]
+    pub nationality: Option<Id>,
+    /// 最近一次僭越（因用鼎、地块超出身份被扣风评）的回合
+    #[serde(default)]
+    pub usurped_turn: Option<u32>,
+    /// 所在的城市，同一时间只能在一座城里。默认在自己管理的城；平时只能搬去自己拥有的城
+    #[serde(default)]
+    pub location: Option<Id>,
 }
 
 impl Character {
@@ -67,6 +177,9 @@ impl Character {
             punished_tile_excess: BTreeMap::new(),
             private_store: Inventory::default(),
             trust: BTreeMap::new(),
+            nationality: None,
+            usurped_turn: None,
+            location: None,
         }
     }
 
@@ -94,7 +207,9 @@ pub struct City {
     pub manager: Option<Id>,
     pub status: CityStatus,
     pub totem: String,
-    /// 城市的地块
+    /// 治所所在的格子，城与城之间的距离从这里算
+    pub seat: Hex,
+    /// 城市的地块，每块对应地图上的一格
     pub tiles: BTreeMap<Id, Tile>,
     pub treasury: Inventory,
     /// 民间财富：民营产出归全城民众共有，城内各群人之间自动互通
@@ -112,9 +227,43 @@ pub struct City {
     /// 所有者发出、对方还没答复的管理权任命
     #[serde(default)]
     pub manager_offer: Option<Id>,
+    /// 配方 → 今年播种的量（按有效人数折算的平均值）。没有记录时收成不受限，比如开局还没经过播种季
+    #[serde(default)]
+    pub sown: BTreeMap<String, f64>,
+    /// 封君：把这座城封给现在的所有者的人。封地不能收回
+    #[serde(default)]
+    pub liege: Option<Id>,
+    /// 所有者发出、对方还没答复的封授
+    #[serde(default)]
+    pub fief_offer: Option<Id>,
+    /// 封君手动指定的纳贡；没有时每年年末按府库当年总产出自动纳贡
+    #[serde(default)]
+    pub tribute: Option<Tribute>,
+    /// 合理的纳贡连续几年没交够
+    #[serde(default)]
+    pub tribute_shortfall_years: u32,
+    /// 府库今年的总产出：收上来的税和官营产出，年末结算后清零
+    #[serde(default)]
+    pub income: Inventory,
+    /// 府库去年的总产出，判断纳贡是否过火时用
+    #[serde(default)]
+    pub last_income: Option<Inventory>,
+    /// 通行权：人物 id → 到第几回合为止（不含）。有通行权的人，军队可以从这座城的地上经过。
+    /// 通行权由所有者在赠与、交易中给出，有期限；没有的人，哪怕是同一国的，军队也过不去
+    #[serde(default)]
+    pub passage: BTreeMap<Id, u32>,
 }
 
-/// 规定任务：每年要上缴给所有者的物资，冬季结算后清零重新累计。
+/// 封君手动指定的纳贡：每年要纳的物资。封臣随时纳贡，进封君的私库，年末结算后清零重新累计。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Tribute {
+    pub goods: Inventory,
+    pub delivered: Inventory,
+    /// 纳贡过火时封臣可以拒绝，拒绝后不用交
+    pub refused: bool,
+}
+
+/// 规定任务：每年要上缴给所有者的物资，年末结算后清零重新累计。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Quota {
     /// 每年要上缴的物资
@@ -160,6 +309,15 @@ impl City {
             .filter(|a| matches!(&a.task, Task::Construct { tile: target, .. } if *target == tile))
             .count() as u32;
         config.terrains[&t.terrain].building_slots.saturating_sub(t.buildings.len() as u32 + pending)
+    }
+
+    pub fn tile_at(&self, pos: Hex) -> Option<&Tile> {
+        self.tiles.values().find(|t| t.pos == pos)
+    }
+
+    /// 这一格是否和城市的某块地相邻
+    pub fn borders(&self, pos: Hex) -> bool {
+        self.tile_at(pos).is_none() && self.tiles.values().any(|t| t.pos.is_adjacent(pos))
     }
 
     pub fn has_terrain(&self, terrain: &str) -> bool {
@@ -334,7 +492,8 @@ impl City {
     fn split_group(&mut self, config: &Config, source_id: Id, count: u32, skills: &[String], next_id: &mut Id) -> Id {
         let source = self.groups.get_mut(&source_id).expect("source group exists");
         let count = count.min(source.size);
-        let (totem, culture, happiness, loyalty) = (source.totem.clone(), source.culture, source.happiness, source.loyalty);
+        let (totem, culture, happiness, loyalty, hostility) =
+            (source.totem.clone(), source.culture, source.happiness, source.loyalty, source.hostility);
         let existing = self
             .groups
             .values()
@@ -353,6 +512,7 @@ impl City {
             target.happiness = (target.happiness * target.size as f64 + happiness * count as f64) / total;
             target.culture = (target.culture * target.size as f64 + culture * count as f64) / total;
             target.loyalty = (target.loyalty * target.size as f64 + loyalty * count as f64) / total;
+            target.hostility = (target.hostility * target.size as f64 + hostility * count as f64) / total;
             target.size += count;
             return target.id;
         }
@@ -370,6 +530,7 @@ impl City {
                 happiness,
                 loyalty,
                 growth_carry: 0.0,
+                hostility,
             },
         );
         id
@@ -413,6 +574,9 @@ pub struct JobSlot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tile {
     pub id: Id,
+    /// 在地图上的位置
+    pub pos: Hex,
+    /// 和地图上这一格的地形相同
     pub terrain: String,
     /// 改良 id → 等级
     #[serde(default)]
@@ -430,8 +594,8 @@ pub struct Building {
 }
 
 impl Tile {
-    pub fn new(id: Id, terrain: impl Into<String>) -> Self {
-        Tile { id, terrain: terrain.into(), improvements: BTreeMap::new(), buildings: Vec::new() }
+    pub fn new(id: Id, pos: Hex, terrain: impl Into<String>) -> Self {
+        Tile { id, pos, terrain: terrain.into(), improvements: BTreeMap::new(), buildings: Vec::new() }
     }
 
     pub fn yield_mult(&self, config: &Config) -> f64 {
@@ -462,6 +626,10 @@ pub struct PopGroup {
     pub loyalty: f64,
     /// 人口增长的小数部分，攒满 1 人再加入
     pub growth_carry: f64,
+    /// 对封君的敌视：封君要的纳贡过火时产生。封君对封地发起的事，这些人的产能会降低，
+    /// 面对封君的讨伐战斗力会升高（等征调和军队做出来后生效）
+    #[serde(default)]
+    pub hostility: f64,
 }
 
 impl PopGroup {
@@ -517,9 +685,9 @@ pub enum Task {
     Produce { recipe: String, mode: Mode },
     /// 在一块地上营建。`mode` 是建成后这座建筑的经营方式；营建本身一律由府库出材料、视为官营
     Construct { building: String, tile: Id, mode: Mode },
-    /// 开垦一块新地，需要会对应技能的人，期间参与的人一直被占用。
-    /// 地图做出来之前由指令指定地形，以后改为开垦城市旁边的一格，地形由地图决定
-    Reclaim { terrain: String },
+    /// 把和城市相邻的一格野地开垦进来。`terrain` 必须和地图上这一格的地形相同，决定需要什么技能；
+    /// 期间参与的人一直被占用
+    Reclaim { at: Hex, terrain: String },
     /// 改良一块地，比如水利。和营建一样视为官营
     Improve { tile: Id, improvement: String },
     CollectTax,
@@ -540,7 +708,7 @@ impl Task {
             }
             Task::Construct { building, .. } => config.buildings[building].skill.as_ref(),
             Task::Improve { improvement, .. } => config.improvements[improvement].skill.as_ref(),
-            Task::Reclaim { terrain } => config.terrains[terrain].reclaim_skill.as_ref(),
+            Task::Reclaim { terrain, .. } => config.terrains[terrain].reclaim_skill.as_ref(),
             Task::CollectTax | Task::Sacrifice => None,
         };
         skill.is_none_or(|s| group.has_skill(s))

@@ -6,8 +6,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::config::Config;
+use crate::deal::{self, Deal, Stake};
+use crate::fief;
 use crate::inventory::Inventory;
-use crate::state::{Assignment, City, CityStatus, GameState, Id, Learning, Mode, Official, Quota, Task};
+use crate::map::Hex;
+use crate::state::{Assignment, City, CityStatus, GameState, Id, Learning, Mode, Official, Quota, Task, Tribute};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -57,14 +60,48 @@ pub enum Command {
     SetQuota { city: Id, goods: Inventory },
     /// 管理者从府库上缴物资到所有者的私库，计入今年的规定任务
     Deliver { city: Id, goods: Inventory },
+    /// 所有者把城市封授给别人，对方接受后才生效。封出去的城不能收回
+    OfferFief { city: Id, to: Id },
+    /// 受封：成为这座城的所有者，原所有者成为封君
+    AcceptFief { city: Id },
+    DeclineFief { city: Id },
+    /// 封君指定每年的纳贡，取代按比例自动纳贡。为空表示恢复自动纳贡
+    SetTribute { city: Id, goods: Inventory },
+    /// 封臣拒绝过火的纳贡
+    RefuseTribute { city: Id },
+    /// 封臣从府库纳贡到封君的私库，计入今年指定的纳贡
+    PayTribute { city: Id, goods: Inventory },
+    /// 向某人提出赠与（只给）、索取（只要）或交易（有给有要），对方接受就立即成交。
+    /// `into`：自己收到的物资放进哪座城的府库，不填为私库
+    ProposeDeal {
+        to: Id,
+        #[serde(default)]
+        give: Stake,
+        #[serde(default)]
+        take: Stake,
+        #[serde(default)]
+        into: Option<Id>,
+    },
+    /// 接受提议，立即成交。`into`：收到的物资放进哪座城的府库，不填为私库
+    AcceptDeal {
+        deal: Id,
+        #[serde(default)]
+        into: Option<Id>,
+    },
+    DeclineDeal { deal: Id },
+    /// 提议的人撤回
+    CancelDeal { deal: Id },
+    /// 搬去另一座城待着。平时只能搬去自己拥有的城
+    MoveTo { city: Id },
     /// 丢弃技能、调整技能顺序，当回合生效。`skills` 只能由这群人现有的技能组成，顺序即优先顺序。
     /// 正在学技能的人要等学成再调整
     ArrangeSkills { city: Id, group: Id, count: u32, skills: Vec<String> },
 }
 
 impl Command {
-    pub fn city(&self) -> Id {
-        match self {
+    /// 指令针对的城市；赠与、索取、交易是人与人之间的，搬家是人物自己的事，都没有城市。
+    pub fn city(&self) -> Option<Id> {
+        Some(match self {
             Command::AppointShi { city, .. }
             | Command::DismissShi { city, .. }
             | Command::StartAssignment { city, .. }
@@ -78,13 +115,28 @@ impl Command {
             | Command::DeclineManagement { city }
             | Command::RevokeManagement { city }
             | Command::SetQuota { city, .. }
-            | Command::Deliver { city, .. } => *city,
-        }
+            | Command::Deliver { city, .. }
+            | Command::OfferFief { city, .. }
+            | Command::AcceptFief { city }
+            | Command::DeclineFief { city }
+            | Command::SetTribute { city, .. }
+            | Command::RefuseTribute { city }
+            | Command::PayTribute { city, .. } => *city,
+            Command::ProposeDeal { .. }
+            | Command::AcceptDeal { .. }
+            | Command::DeclineDeal { .. }
+            | Command::CancelDeal { .. }
+            | Command::MoveTo { .. } => return None,
+        })
     }
 }
 
 #[derive(Debug, Error, PartialEq)]
 pub enum CommandError {
+    #[error("通行权的期限至少要 1 回合")]
+    ZeroPassageTurns,
+    #[error("你已经在城市 {0} 了")]
+    AlreadyThere(Id),
     #[error("城市 {0} 不存在")]
     NoSuchCity(Id),
     #[error("你不是城市 {0} 的管理者，城中的士人不听你的")]
@@ -105,6 +157,38 @@ pub enum CommandError {
     OwnerIsManager,
     #[error("这座城没有所有者")]
     NoOwner,
+    #[error("这座城是封地，不能再封给别人")]
+    AlreadyFief,
+    #[error("不能把城封给自己")]
+    CannotEnfeoffSelf,
+    #[error("人物 {0} 是你的上司，不能封给他")]
+    CannotEnfeoffSuperior(Id),
+    #[error("人物 {0} 是别国的人，要先投奔过来才能受封")]
+    DifferentCountry(Id),
+    #[error("没有封授这座城给你")]
+    NotOfferedFief,
+    #[error("城市 {0} 不是封地")]
+    NotAFief(Id),
+    #[error("你不是城市 {0} 的封君")]
+    NotLiege(Id),
+    #[error("封君没有指定纳贡")]
+    NoTributeDemand,
+    #[error("这次纳贡不算过火，不能拒绝")]
+    TributeNotExcessive,
+    #[error("提议 {0} 不存在")]
+    NoSuchDeal(Id),
+    #[error("提议 {0} 不归你答复或撤回")]
+    NotYourDeal(Id),
+    #[error("不能和自己往来")]
+    DealWithSelf,
+    #[error("什么都没给，也什么都没要")]
+    EmptyDeal,
+    #[error("私库中的「{0}」不够")]
+    NotEnoughInPrivateStore(String),
+    #[error("城市 {0} 重复了")]
+    DuplicateCity(Id),
+    #[error("城市 {0} 是都城，不能送人或拿来交易")]
+    CapitalCannotChangeHands(Id),
     #[error("人群 {0} 不存在")]
     NoSuchGroup(Id),
     #[error("士人 {0} 不存在")]
@@ -169,8 +253,16 @@ pub enum CommandError {
     NoBuildingSlot,
     #[error("「{0}」不能建在这种地上")]
     WrongTerrain(String),
-    #[error("地块种类「{0}」不存在")]
-    NoSuchTerrain(String),
+    #[error("地图上没有 {0} 这一格")]
+    NoSuchCell(Hex),
+    #[error("{at} 已经是{city}的地")]
+    CellTaken { at: Hex, city: String },
+    #[error("{0} 不和本城的地相邻")]
+    NotBordering(Hex),
+    #[error("{at} 是{actual}")]
+    TerrainMismatch { at: Hex, actual: String },
+    #[error("已经在开垦 {0}")]
+    AlreadyReclaiming(Hex),
     #[error("「{0}」开垦不出来")]
     CannotReclaim(String),
     #[error("物品「{0}」不存在")]
@@ -188,7 +280,18 @@ fn mode_name(mode: Mode) -> &'static str {
 
 /// 人物 `actor` 发出一条指令：先检查权限，再执行。返回新创建的实体 id（任用的士人、新开的工事、学技能的批次、调整技能后归入的人群）。
 pub fn apply(state: &mut GameState, config: &Config, actor: Id, command: &Command) -> Result<Vec<Id>, CommandError> {
-    let city_id = command.city();
+    let result = apply_inner(state, config, actor, command);
+    // 城送了人、封了出去之后，原来待在那里的人回到默认的地方
+    if result.is_ok() {
+        state.settle_locations();
+    }
+    result
+}
+
+fn apply_inner(state: &mut GameState, config: &Config, actor: Id, command: &Command) -> Result<Vec<Id>, CommandError> {
+    let Some(city_id) = command.city() else {
+        return apply_personal(state, config, actor, command);
+    };
     let city = state.cities.get(&city_id).ok_or(CommandError::NoSuchCity(city_id))?;
     match command {
         Command::OfferManagement { to, .. } => {
@@ -242,6 +345,112 @@ pub fn apply(state: &mut GameState, config: &Config, actor: Id, command: &Comman
             }
             Ok(vec![])
         }
+        Command::OfferFief { to, .. } => {
+            check_owner(city, actor)?;
+            if city.liege.is_some() {
+                return Err(CommandError::AlreadyFief);
+            }
+            if *to == actor {
+                return Err(CommandError::CannotEnfeoffSelf);
+            }
+            let target = state.characters.get(to).ok_or(CommandError::NoSuchCharacter(*to))?;
+            // 上司：自己替他管城的人
+            if state.cities.values().any(|c| c.owner == Some(*to) && c.manager == Some(actor)) {
+                return Err(CommandError::CannotEnfeoffSuperior(*to));
+            }
+            check_same_country(state, actor, target.id)?;
+            city_mut(state, city_id)?.fief_offer = Some(*to);
+            Ok(vec![])
+        }
+        Command::AcceptFief { .. } => {
+            if city.fief_offer != Some(actor) {
+                return Err(CommandError::NotOfferedFief);
+            }
+            let liege = city.owner.ok_or(CommandError::NoOwner)?;
+            check_same_country(state, liege, actor)?;
+            let manages_other = state.cities.values().any(|c| c.id != city_id && c.manager == Some(actor));
+            let nationality = state.characters.get(&liege).and_then(|c| c.nationality);
+            let city = city_mut(state, city_id)?;
+            city.owner = Some(actor);
+            city.liege = Some(liege);
+            city.fief_offer = None;
+            city.manager_offer = None;
+            city.quota = None;
+            city.tribute = None;
+            city.tribute_shortfall_years = 0;
+            city.passage.clear();
+            for group in city.groups.values_mut() {
+                group.hostility = 0.0;
+            }
+            // 管理权归受封者；他已经在管别的城时，这座城先没有管理者，等他任命别人
+            if manages_other {
+                city.manager = None;
+                for group in city.groups.values_mut() {
+                    group.loyalty = config.loyalty.reset;
+                }
+            } else {
+                city.change_manager(actor, config);
+            }
+            // 无国籍的人受封后加入封君的国家
+            if let Some(vassal) = state.characters.get_mut(&actor)
+                && vassal.nationality.is_none()
+            {
+                vassal.nationality = nationality;
+            }
+            Ok(vec![])
+        }
+        Command::DeclineFief { .. } => {
+            if city.fief_offer != Some(actor) {
+                return Err(CommandError::NotOfferedFief);
+            }
+            city_mut(state, city_id)?.fief_offer = None;
+            Ok(vec![])
+        }
+        Command::SetTribute { goods, .. } => {
+            check_liege(city, actor)?;
+            check_goods(config, goods)?;
+            let city = city_mut(state, city_id)?;
+            if goods.iter().next().is_none() {
+                city.tribute = None;
+            } else {
+                // 改了纳贡要重新答复；今年已经纳的照样算
+                let delivered = city.tribute.take().map(|t| t.delivered).unwrap_or_default();
+                city.tribute = Some(Tribute { goods: goods.clone(), delivered, refused: false });
+            }
+            Ok(vec![])
+        }
+        Command::RefuseTribute { .. } => {
+            check_owner(city, actor)?;
+            if city.liege.is_none() {
+                return Err(CommandError::NotAFief(city_id));
+            }
+            if city.tribute.is_none() {
+                return Err(CommandError::NoTributeDemand);
+            }
+            let months = state.turn % config.turns_per_year();
+            if fief::overreach(city, config, months).is_none() {
+                return Err(CommandError::TributeNotExcessive);
+            }
+            city_mut(state, city_id)?.tribute.as_mut().expect("checked above").refused = true;
+            Ok(vec![])
+        }
+        Command::PayTribute { goods, .. } => {
+            check_owner(city, actor)?;
+            let liege = city.liege.ok_or(CommandError::NotAFief(city_id))?;
+            check_treasury(config, city, goods)?;
+            let city = city_mut(state, city_id)?;
+            let mut paid = Inventory::default();
+            for (good, amount) in goods.iter() {
+                paid.add(good, city.treasury.take(good, *amount));
+            }
+            if let Some(tribute) = &mut city.tribute {
+                tribute.delivered.add_all(&paid);
+            }
+            if let Some(liege) = state.characters.get_mut(&liege) {
+                liege.private_store.add_all(&paid);
+            }
+            Ok(vec![])
+        }
         // 其余指令都是管理城内事务，只有管理者能发
         _ => {
             if city.manager != Some(actor) {
@@ -261,6 +470,83 @@ fn check_owner(city: &City, actor: Id) -> Result<(), CommandError> {
         return Err(CommandError::CityOccupied(city.id));
     }
     Ok(())
+}
+
+/// 人物自己的事：赠与、索取、交易，搬家。
+fn apply_personal(state: &mut GameState, config: &Config, actor: Id, command: &Command) -> Result<Vec<Id>, CommandError> {
+    let pending = |state: &GameState, id: Id| state.deals.get(&id).cloned().ok_or(CommandError::NoSuchDeal(id));
+    match command {
+        Command::ProposeDeal { to, give, take, into } => {
+            if !state.characters.contains_key(to) {
+                return Err(CommandError::NoSuchCharacter(*to));
+            }
+            if *to == actor {
+                return Err(CommandError::DealWithSelf);
+            }
+            if give.is_empty() && take.is_empty() {
+                return Err(CommandError::EmptyDeal);
+            }
+            deal::check_stake(state, config, actor, give)?;
+            deal::check_stake(state, config, *to, take)?;
+            deal::check_into(state, actor, *into, give)?;
+            let id = state.alloc_id();
+            let deal = Deal { id, from: actor, to: *to, give: give.clone(), take: take.clone(), into: *into };
+            state.deals.insert(id, deal);
+            Ok(vec![id])
+        }
+        Command::AcceptDeal { deal, into } => {
+            let d = pending(state, *deal)?;
+            if d.to != actor {
+                return Err(CommandError::NotYourDeal(*deal));
+            }
+            deal::settle(state, config, &d, *into)?;
+            state.deals.remove(deal);
+            Ok(vec![])
+        }
+        Command::DeclineDeal { deal } => {
+            if pending(state, *deal)?.to != actor {
+                return Err(CommandError::NotYourDeal(*deal));
+            }
+            state.deals.remove(deal);
+            Ok(vec![])
+        }
+        Command::CancelDeal { deal } => {
+            if pending(state, *deal)?.from != actor {
+                return Err(CommandError::NotYourDeal(*deal));
+            }
+            state.deals.remove(deal);
+            Ok(vec![])
+        }
+        Command::MoveTo { city } => {
+            let target = state.cities.get(city).ok_or(CommandError::NoSuchCity(*city))?;
+            check_owner(target, actor)?;
+            let character = state.characters.get_mut(&actor).ok_or(CommandError::NoSuchCharacter(actor))?;
+            if character.location == Some(*city) {
+                return Err(CommandError::AlreadyThere(*city));
+            }
+            character.location = Some(*city);
+            Ok(vec![])
+        }
+        _ => unreachable!("only personal commands have no city"),
+    }
+}
+
+/// 封君才能发的指令。
+fn check_liege(city: &City, actor: Id) -> Result<(), CommandError> {
+    match city.liege {
+        None => Err(CommandError::NotAFief(city.id)),
+        Some(liege) if liege != actor => Err(CommandError::NotLiege(city.id)),
+        Some(_) => Ok(()),
+    }
+}
+
+/// 封授只能在同一国的人之间，或者给无国籍的人。
+fn check_same_country(state: &GameState, liege: Id, vassal: Id) -> Result<(), CommandError> {
+    let nationality = |id: Id| state.characters.get(&id).and_then(|c| c.nationality);
+    match nationality(vassal) {
+        Some(country) if Some(country) != nationality(liege) => Err(CommandError::DifferentCountry(vassal)),
+        _ => Ok(()),
+    }
 }
 
 /// 一个人只能直接管理一座城。
@@ -379,7 +665,18 @@ pub(crate) fn execute(state: &mut GameState, config: &Config, command: &Command)
         | Command::AcceptManagement { city }
         | Command::DeclineManagement { city }
         | Command::RevokeManagement { city }
-        | Command::SetQuota { city, .. } => Err(CommandError::NotOwner(*city)),
+        | Command::SetQuota { city, .. }
+        | Command::OfferFief { city, .. }
+        | Command::AcceptFief { city }
+        | Command::DeclineFief { city }
+        | Command::SetTribute { city, .. }
+        | Command::RefuseTribute { city }
+        | Command::PayTribute { city, .. } => Err(CommandError::NotOwner(*city)),
+        Command::ProposeDeal { to, .. } => Err(CommandError::NoSuchCharacter(*to)),
+        Command::AcceptDeal { deal, .. } | Command::DeclineDeal { deal } | Command::CancelDeal { deal } => {
+            Err(CommandError::NotYourDeal(*deal))
+        }
+        Command::MoveTo { city } => Err(CommandError::NotOwner(*city)),
         Command::LearnSkill { city, group, count, skill, drop_skill } => {
             learn_skill(state, config, *city, *group, *count, skill, drop_skill.as_deref())
         }
@@ -642,9 +939,22 @@ fn start_assignment(
             check_labor(def.skill.as_deref())?;
             materials = Some(def.materials.clone());
         }
-        Task::Reclaim { terrain } => {
-            let def = config.terrains.get(terrain).ok_or_else(|| CommandError::NoSuchTerrain(terrain.clone()))?;
+        Task::Reclaim { at, terrain } => {
+            let cell = state.map.get(*at).ok_or(CommandError::NoSuchCell(*at))?;
+            if let Some(owner) = state.city_at(*at) {
+                return Err(CommandError::CellTaken { at: *at, city: state.cities[&owner].name.clone() });
+            }
+            if !city.borders(*at) {
+                return Err(CommandError::NotBordering(*at));
+            }
+            let def = &config.terrains[&cell.terrain];
+            if &cell.terrain != terrain {
+                return Err(CommandError::TerrainMismatch { at: *at, actual: def.name.clone() });
+            }
             let skill = def.reclaim_skill.as_deref().ok_or_else(|| CommandError::CannotReclaim(def.name.clone()))?;
+            if city.assignments.values().any(|a| matches!(&a.task, Task::Reclaim { at: other, .. } if other == at)) {
+                return Err(CommandError::AlreadyReclaiming(*at));
+            }
             check_labor(Some(skill))?;
         }
         Task::CollectTax => {
