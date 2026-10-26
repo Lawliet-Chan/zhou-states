@@ -850,16 +850,23 @@ fn expire_passage(state: &mut GameState, events: &mut Vec<String>) {
     }
 }
 
-/// 一个国家的城市全部被攻灭，这个国家就灭亡了，国人都成了无国籍。
+/// 国君自己拥有的城全部被攻占（或者国君手里已经没有城），这个国家就灭亡了；
+/// 国人都成了无国籍，包括国内的封臣。
 fn check_countries(state: &mut GameState, events: &mut Vec<String>) {
-    let alive: Vec<Id> = state.cities.values().filter_map(|c| state.country_of(c)).collect();
-    let fallen: Vec<Id> = state.countries.keys().copied().filter(|id| !alive.contains(id)).collect();
+    let fallen: Vec<Id> = state
+        .countries
+        .values()
+        .filter(|country| {
+            !state.cities.values().any(|c| c.owner == Some(country.ruler) && c.status != CityStatus::Occupied)
+        })
+        .map(|country| country.id)
+        .collect();
     for id in fallen {
         let country = state.countries.remove(&id).expect("country exists");
         for character in state.characters.values_mut().filter(|c| c.nationality == Some(id)) {
             character.nationality = None;
         }
-        events.push(format!("{}已经没有一座城，就此灭亡", country.name));
+        events.push(format!("{}国君自己的城已经全部失守，就此灭亡", country.name));
     }
 }
 

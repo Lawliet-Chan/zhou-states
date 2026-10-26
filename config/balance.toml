@@ -253,7 +253,7 @@ weaving = { name = "百工·纺织", default_recipe = "cloth" }
 building = { name = "百工·建筑" }
 water = { name = "百工·水利" }
 commerce = { name = "商业", default_recipe = "trade" }
-soldier = { name = "军队" }
+martial = { name = "军武" }
 
 # ---------------------------------------------------------------- 地块
 # 地块之间没有主次之分：每块地都能住人、劳作、建建筑，区别只在能做哪一行

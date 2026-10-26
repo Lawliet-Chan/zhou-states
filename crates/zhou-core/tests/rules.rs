@@ -1243,6 +1243,9 @@ fn enfeoffment_needs_acceptance_and_cannot_be_taken_back() {
     let config = config();
     let (mut state, ids) = setup(&config);
     let country = add_country(&mut state, "卫", ids.player);
+    // 国君至少要留一座城在自己手里
+    let seat = state.cities[&ids.city].seat;
+    copy_city(&mut state, &ids, ids.player, seat);
     let steward = hand_over(&mut state, &config, &ids);
     let vassal = add_steward(&mut state);
     let offer = Command::OfferFief { city: ids.city, to: vassal };
@@ -1414,7 +1417,37 @@ fn a_country_with_no_cities_left_falls() {
     assert!(state.countries.contains_key(&wei));
     assert!(!state.countries.contains_key(&zheng));
     assert_eq!(state.characters[&landless].nationality, None, "亡国之人成了无国籍");
-    assert!(report.events.iter().any(|e| e.contains("郑已经没有一座城")));
+    assert!(report.events.iter().any(|e| e.contains("郑国君自己的城已经全部失守")));
+
+    // 国君自己的城全被攻占，国家就亡了，哪怕封臣手里还有城；封臣都丧失国籍
+    let (mut state, ids) = setup(&config);
+    let wei = add_country(&mut state, "卫", ids.player);
+    let seat = state.cities[&ids.city].seat;
+    let fief = copy_city(&mut state, &ids, ids.player, seat);
+    let vassal = add_steward(&mut state);
+    apply(&mut state, &config, ids.player, &Command::OfferFief { city: fief, to: vassal }).unwrap();
+    apply(&mut state, &config, vassal, &Command::AcceptFief { city: fief }).unwrap();
+    assert_eq!(state.characters[&vassal].nationality, Some(wei));
+    state.cities.get_mut(&ids.city).unwrap().status = zhou_core::state::CityStatus::Occupied;
+    end_turn(&mut state, &config);
+    assert!(!state.countries.contains_key(&wei));
+    assert_eq!(state.characters[&vassal].nationality, None);
+}
+
+#[test]
+fn a_ruler_must_keep_one_city_of_his_own() {
+    let config = config();
+    let (mut state, ids) = setup(&config);
+    add_country(&mut state, "卫", ids.player);
+    let other = add_steward(&mut state);
+    // 手里只有一座城，封不出去、送不出去
+    assert_eq!(apply(&mut state, &config, ids.player, &Command::OfferFief { city: ids.city, to: other }), Err(CommandError::RulerMustKeepACity));
+    let give = zhou_core::Stake { cities: vec![ids.city], ..Default::default() };
+    assert_eq!(propose(&mut state, &config, ids.player, other, give, Default::default(), None), Err(CommandError::RulerMustKeepACity));
+    // 有两座就能封出一座
+    let seat = state.cities[&ids.city].seat;
+    copy_city(&mut state, &ids, ids.player, seat);
+    apply(&mut state, &config, ids.player, &Command::OfferFief { city: ids.city, to: other }).unwrap();
 }
 
 fn goods(pairs: &[(&str, f64)]) -> Inventory {
@@ -1699,6 +1732,8 @@ fn armies_pass_a_city_only_with_the_owners_permission() {
     let deal = propose(&mut state, &config, ids.player, neighbor, passage(Some(2)), Default::default(), None).unwrap();
     apply(&mut state, &config, neighbor, &Command::AcceptDeal { deal, into: None }).unwrap();
     assert_eq!(state.cities[&ids.city].passage[&neighbor], state.turn + 2);
+    // 国君要留一座城在自己手里，先给他另一座
+    copy_city(&mut state, &ids, ids.player, seat);
     let give = zhou_core::Stake { cities: vec![ids.city], ..Default::default() };
     let deal = propose(&mut state, &config, ids.player, steward, give, Default::default(), None).unwrap();
     apply(&mut state, &config, steward, &Command::AcceptDeal { deal, into: None }).unwrap();

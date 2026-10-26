@@ -133,6 +133,8 @@ impl Command {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum CommandError {
+    #[error("国君至少要留一座城在自己手里")]
+    RulerMustKeepACity,
     #[error("通行权的期限至少要 1 回合")]
     ZeroPassageTurns,
     #[error("你已经在城市 {0} 了")]
@@ -359,6 +361,9 @@ fn apply_inner(state: &mut GameState, config: &Config, actor: Id, command: &Comm
                 return Err(CommandError::CannotEnfeoffSuperior(*to));
             }
             check_same_country(state, actor, target.id)?;
+            if !state.ruler_keeps_a_city(actor, &[city_id]) {
+                return Err(CommandError::RulerMustKeepACity);
+            }
             city_mut(state, city_id)?.fief_offer = Some(*to);
             Ok(vec![])
         }
@@ -368,6 +373,9 @@ fn apply_inner(state: &mut GameState, config: &Config, actor: Id, command: &Comm
             }
             let liege = city.owner.ok_or(CommandError::NoOwner)?;
             check_same_country(state, liege, actor)?;
+            if !state.ruler_keeps_a_city(liege, &[city_id]) {
+                return Err(CommandError::RulerMustKeepACity);
+            }
             let manages_other = state.cities.values().any(|c| c.id != city_id && c.manager == Some(actor));
             let nationality = state.characters.get(&liege).and_then(|c| c.nationality);
             let city = city_mut(state, city_id)?;

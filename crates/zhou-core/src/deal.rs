@@ -99,6 +99,9 @@ pub(crate) fn check_stake(state: &GameState, config: &Config, who: Id, stake: &S
             return Err(CommandError::CapitalCannotChangeHands(*city_id));
         }
     }
+    if !state.ruler_keeps_a_city(who, &stake.cities) {
+        return Err(CommandError::RulerMustKeepACity);
+    }
     for (i, p) in stake.passage.iter().enumerate() {
         // 同一座城的通行权只能给一次，也不能连城带通行权一起给
         if stake.passage[..i].iter().any(|q| q.city == p.city) || stake.cities.contains(&p.city) {

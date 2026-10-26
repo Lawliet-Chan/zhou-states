@@ -55,6 +55,14 @@ impl GameState {
         city.owner.and_then(|o| self.characters.get(&o)).and_then(|c| c.nationality)
     }
 
+    /// 国君送走、封出 `losing` 这些城之后，自己手里还剩不剩城。不是国君时总是 true。
+    /// 国君至少要留一座城的所有权在自己手里，否则国家就亡了。
+    pub fn ruler_keeps_a_city(&self, who: Id, losing: &[Id]) -> bool {
+        losing.is_empty()
+            || !self.countries.values().any(|c| c.ruler == who)
+            || self.cities.values().any(|c| c.owner == Some(who) && !losing.contains(&c.id))
+    }
+
     /// 邻城增益：同一个所有者的其他城，治所相距不超过 `neighbor.range` 格的，每座给这座城的产出加一成，有上限。
     /// 返回产出的倍数。
     pub fn neighbor_mult(&self, config: &Config, city: &City) -> f64 {
