@@ -280,7 +280,6 @@ impl Jobs {
 /// 结算当前回合，返回结算报告，回合数加一。
 pub fn end_turn(state: &mut GameState, config: &Config) -> TurnReport {
     let season = state.season_index(config);
-    let year = state.year(config);
     let month = state.month(config);
     let mut events = std::mem::take(&mut state.pending_events);
     expire_offers(state, &mut events);
@@ -343,7 +342,26 @@ pub fn end_turn(state: &mut GameState, config: &Config) -> TurnReport {
     crate::supply::refresh_all(state, config);
     crate::vision::observe(state, config);
 
-    let report = TurnReport {
+    let report = build_report(state, config, events, jobs);
+    state.turn += 1;
+    report
+}
+
+/// 回合中的报告：还没结算，事件是回合中已经发生的，工作记录为空。服务器在玩家下指令后用它推送最新情况。
+pub fn snapshot(state: &GameState, config: &Config) -> TurnReport {
+    build_report(state, config, state.pending_events.clone(), BTreeMap::new())
+}
+
+fn build_report(
+    state: &GameState,
+    config: &Config,
+    events: Vec<Event>,
+    mut jobs: BTreeMap<Id, Vec<JobReport>>,
+) -> TurnReport {
+    let season = state.season_index(config);
+    let year = state.year(config);
+    let month = state.month(config);
+    TurnReport {
         turn: state.turn,
         year,
         month,
@@ -411,9 +429,7 @@ pub fn end_turn(state: &mut GameState, config: &Config) -> TurnReport {
                 location: c.location,
             })
             .collect(),
-    };
-    state.turn += 1;
-    report
+    }
 }
 
 /// 结算一座城要用到的城外的情况。
