@@ -69,8 +69,27 @@ impl Deal {
 }
 
 /// `who` 拿得出这些东西：物资都够，城市都是自己的、不是封地、没有被攻占。
-pub(crate) fn check_stake(state: &GameState, config: &Config, who: Id, stake: &Stake) -> Result<(), CommandError> {
-    let character = state.characters.get(&who).ok_or(CommandError::NoSuchCharacter(who))?;
+pub(crate) fn check_stake(
+    state: &GameState,
+    config: &Config,
+    who: Id,
+    stake: &Stake,
+) -> Result<(), CommandError> {
+    check_stake_with(state, config, who, stake, false)
+}
+
+/// 讲和时割让的城可以是被对方攻占着的。
+pub(crate) fn check_stake_with(
+    state: &GameState,
+    config: &Config,
+    who: Id,
+    stake: &Stake,
+    ceding: bool,
+) -> Result<(), CommandError> {
+    let character = state
+        .characters
+        .get(&who)
+        .ok_or(CommandError::NoSuchCharacter(who))?;
     check_goods(config, &stake.private)?;
     for (good, amount) in stake.private.iter() {
         if character.private_store.get(good) + 1e-9 < *amount {
@@ -90,12 +109,25 @@ pub(crate) fn check_stake(state: &GameState, config: &Config, who: Id, stake: &S
         if stake.cities[..i].contains(city_id) {
             return Err(CommandError::DuplicateCity(*city_id));
         }
+        let city = if ceding {
+            state
+                .cities
+                .get(city_id)
+                .filter(|c| c.owner == Some(who))
+                .ok_or(CommandError::NotOwner(*city_id))?
+        } else {
+            owned_city(state, who, *city_id)?
+        };
         // 封地是封君封给自己的，不能转手
-        if owned_city(state, who, *city_id)?.liege.is_some() {
+        if city.liege.is_some() {
             return Err(CommandError::AlreadyFief);
         }
         // 都城不能送人、不能拿来交易
-        if state.countries.values().any(|c| c.capital == Some(*city_id)) {
+        if state
+            .countries
+            .values()
+            .any(|c| c.capital == Some(*city_id))
+        {
             return Err(CommandError::CapitalCannotChangeHands(*city_id));
         }
     }
@@ -116,7 +148,12 @@ pub(crate) fn check_stake(state: &GameState, config: &Config, who: Id, stake: &S
 }
 
 /// 收到的物资放进 `into` 这座城的府库：城必须是自己的，而且不在这次送出去的城里。
-pub(crate) fn check_into(state: &GameState, who: Id, into: Option<Id>, giving: &Stake) -> Result<(), CommandError> {
+pub(crate) fn check_into(
+    state: &GameState,
+    who: Id,
+    into: Option<Id>,
+    giving: &Stake,
+) -> Result<(), CommandError> {
     let Some(city) = into else { return Ok(()) };
     owned_city(state, who, city)?;
     if giving.cities.contains(&city) {
@@ -126,7 +163,12 @@ pub(crate) fn check_into(state: &GameState, who: Id, into: Option<Id>, giving: &
 }
 
 /// 两边都再检查一遍，然后成交。
-pub(crate) fn settle(state: &mut GameState, config: &Config, deal: &Deal, accept_into: Option<Id>) -> Result<(), CommandError> {
+pub(crate) fn settle(
+    state: &mut GameState,
+    config: &Config,
+    deal: &Deal,
+    accept_into: Option<Id>,
+) -> Result<(), CommandError> {
     check_stake(state, config, deal.from, &deal.give)?;
     check_stake(state, config, deal.to, &deal.take)?;
     check_into(state, deal.from, deal.into, &deal.give)?;
@@ -136,7 +178,30 @@ pub(crate) fn settle(state: &mut GameState, config: &Config, deal: &Deal, accept
     Ok(())
 }
 
-fn transfer(state: &mut GameState, config: &Config, from: Id, to: Id, stake: &Stake, into: Option<Id>) {
+/// 讲和：两边都再检查一遍，然后交割。割让的城可以是被对方攻占着的，交给攻占者就不再算被攻占。
+pub(crate) fn settle_peace(
+    state: &mut GameState,
+    config: &Config,
+    from: Id,
+    to: Id,
+    give: &Stake,
+    take: &Stake,
+) -> Result<(), CommandError> {
+    check_stake_with(state, config, from, give, true)?;
+    check_stake_with(state, config, to, take, true)?;
+    transfer(state, config, from, to, give, None);
+    transfer(state, config, to, from, take, None);
+    Ok(())
+}
+
+fn transfer(
+    state: &mut GameState,
+    config: &Config,
+    from: Id,
+    to: Id,
+    stake: &Stake,
+    into: Option<Id>,
+) {
     let mut goods = Inventory::default();
     let giver = state.characters.get_mut(&from).expect("checked");
     for (good, amount) in stake.private.iter() {
@@ -149,13 +214,29 @@ fn transfer(state: &mut GameState, config: &Config, from: Id, to: Id, stake: &St
         }
     }
     match into {
-        Some(city) => state.cities.get_mut(&city).expect("checked").treasury.add_all(&goods),
-        None => state.characters.get_mut(&to).expect("checked").private_store.add_all(&goods),
+        Some(city) => state
+            .cities
+            .get_mut(&city)
+            .expect("checked")
+            .treasury
+            .add_all(&goods),
+        None => state
+            .characters
+            .get_mut(&to)
+            .expect("checked")
+            .private_store
+            .add_all(&goods),
     }
     // 已经有通行权的，到期时间取晚的那个
     for p in &stake.passage {
         let until = state.turn + p.turns.unwrap_or(config.passage.default_turns);
-        let entry = state.cities.get_mut(&p.city).expect("checked").passage.entry(to).or_insert(0);
+        let entry = state
+            .cities
+            .get_mut(&p.city)
+            .expect("checked")
+            .passage
+            .entry(to)
+            .or_insert(0);
         *entry = (*entry).max(until);
     }
     for city in &stake.cities {
@@ -166,9 +247,17 @@ fn transfer(state: &mut GameState, config: &Config, from: Id, to: Id, stake: &St
 /// 城市整座易手：所有权直接转给对方，不形成封君封臣关系。
 /// 管理权归新主人；他已经在管别的城时，这座城先没有管理者，等他任命别人。
 fn give_city(state: &mut GameState, config: &Config, city_id: Id, to: Id) {
-    let manages_other = state.cities.values().any(|c| c.id != city_id && c.manager == Some(to));
+    crate::army::transfer(state, city_id, to);
+    let manages_other = state
+        .cities
+        .values()
+        .any(|c| c.id != city_id && c.manager == Some(to));
     let city = state.cities.get_mut(&city_id).expect("checked");
     city.owner = Some(to);
+    if city.occupier == Some(to) {
+        city.status = CityStatus::Ruled;
+        city.occupier = None;
+    }
     city.fief_offer = None;
     city.manager_offer = None;
     city.quota = None;
@@ -188,7 +277,10 @@ fn give_city(state: &mut GameState, config: &Config, city_id: Id, to: Id) {
 }
 
 fn owned_city(state: &GameState, who: Id, city: Id) -> Result<&crate::state::City, CommandError> {
-    let c = state.cities.get(&city).ok_or(CommandError::NoSuchCity(city))?;
+    let c = state
+        .cities
+        .get(&city)
+        .ok_or(CommandError::NoSuchCity(city))?;
     if c.owner != Some(who) {
         return Err(CommandError::NotOwner(city));
     }

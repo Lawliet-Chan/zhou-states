@@ -24,7 +24,11 @@ pub fn overreach(city: &City, config: &Config, months: u32) -> Option<f64> {
         return None;
     }
     // 府库没有产出时，要什么都算过火，按最重的算
-    Some(if limit > 0.0 { demanded / limit - 1.0 } else { f64::INFINITY })
+    Some(if limit > 0.0 {
+        demanded / limit - 1.0
+    } else {
+        f64::INFINITY
+    })
 }
 
 /// 封君征讨封臣的理由。封地不能收回，这些只能作为征讨的理由，成立的越多，征讨时战斗力越强。
@@ -37,6 +41,8 @@ pub enum Grievance {
     Usurpation,
     /// 合理的纳贡连续几年没交够
     TributeShortfall { years: u32 },
+    /// 最近一年内违抗过国君：不执行国战任务，或者国君制止后还动手
+    Defiance,
 }
 
 impl Grievance {
@@ -45,24 +51,39 @@ impl Grievance {
             Grievance::LowReputation => "风评太低".into(),
             Grievance::Usurpation => "僭越".into(),
             Grievance::TributeShortfall { years } => format!("连续 {years} 年纳贡不足"),
+            Grievance::Defiance => "违抗国君".into(),
         }
     }
 }
 
 /// 封君对这座封地的封臣有哪些征讨的理由。不是封地时为空。
 pub fn grievances(state: &GameState, config: &Config, city: &City) -> Vec<Grievance> {
-    let (Some(_), Some(vassal)) = (city.liege, city.owner.and_then(|o| state.characters.get(&o))) else {
+    let (Some(_), Some(vassal)) = (
+        city.liege,
+        city.owner.and_then(|o| state.characters.get(&o)),
+    ) else {
         return Vec::new();
     };
     let mut found = Vec::new();
     if vassal.reputation < config.fief.low_reputation {
         found.push(Grievance::LowReputation);
     }
-    if vassal.usurped_turn.is_some_and(|t| state.turn < t + config.turns_per_year()) {
+    if vassal
+        .usurped_turn
+        .is_some_and(|t| state.turn < t + config.turns_per_year())
+    {
         found.push(Grievance::Usurpation);
     }
+    if vassal
+        .defied_turn
+        .is_some_and(|t| state.turn < t + config.turns_per_year())
+    {
+        found.push(Grievance::Defiance);
+    }
     if city.tribute_shortfall_years >= config.fief.shortfall_years {
-        found.push(Grievance::TributeShortfall { years: city.tribute_shortfall_years });
+        found.push(Grievance::TributeShortfall {
+            years: city.tribute_shortfall_years,
+        });
     }
     found
 }

@@ -36,6 +36,17 @@ pub struct Config {
     pub neighbor: NeighborConfig,
     pub passage: PassageConfig,
     pub reclaim: ReclaimConfig,
+    pub military: MilitaryConfig,
+    pub combat: CombatConfig,
+    pub siege: SiegeConfig,
+    pub occupation: OccupationConfig,
+    pub plunder: PlunderConfig,
+    pub war: WarConfig,
+    pub supply: SupplyConfig,
+    pub vision: VisionConfig,
+    pub units: BTreeMap<String, UnitDef>,
+    /// 物品类别：id → 名称
+    pub categories: BTreeMap<String, String>,
     pub goods: BTreeMap<String, GoodDef>,
     pub skills: BTreeMap<String, SkillDef>,
     pub terrains: BTreeMap<String, TerrainDef>,
@@ -227,6 +238,8 @@ pub struct GoodDef {
     pub value: f64,
     /// 这种物品的精品
     pub fine: Option<String>,
+    /// 类别，劫掠时按类别挑
+    pub category: String,
 }
 
 fn default_value() -> f64 {
@@ -237,6 +250,138 @@ fn default_value() -> f64 {
 pub struct SkillDef {
     pub name: String,
     pub default_recipe: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MilitaryConfig {
+    /// 能当兵的技能
+    pub skill: String,
+    /// 完全没有装备的兵，战斗力剩下的比例；装备不全时按缺的比例折算
+    pub unequipped_mult: f64,
+}
+
+/// 交战。战斗力 = 人数 × 兵种的攻击或防御 × 装备倍率 × 其他加成。
+#[derive(Debug, Clone, Deserialize)]
+pub struct CombatConfig {
+    /// 每点战斗力每次交战杀死对方的人数
+    pub lethality: f64,
+    /// 远程攻击的距离（格）
+    pub ranged_range: u32,
+    /// 全军带甲时防御增加的比例
+    pub armor_bonus: f64,
+    /// 守城墙的兵还手时战斗力增加的比例
+    pub wall_bonus: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SiegeConfig {
+    /// 有城墙的建筑
+    pub wall_building: String,
+    pub wall_hp: f64,
+    pub center_hp: f64,
+    /// 每架攻城机每次攻击打掉的城墙、城中心的防御值
+    pub engine_damage: f64,
+    /// 攻城机这种物品
+    pub engine_good: String,
+    /// 每点战斗力打掉的城墙防御值
+    pub wall_rate: f64,
+    /// 每点战斗力打掉的城中心防御值
+    pub center_rate: f64,
+    /// 修城墙的技能，每 100 名工人每回合修多少
+    pub repair_skill: String,
+    pub repair_per_100: f64,
+}
+
+/// 占领：城中人群对占领者的初始忠诚度 = base + 管城者风评 × reputation_mult（最多加 reputation_max）
+/// + 旧忠诚度低于 grudge_below 时每低 1 点加 grudge_mult（最多加 grudge_max）
+#[derive(Debug, Clone, Deserialize)]
+pub struct OccupationConfig {
+    pub base_loyalty: f64,
+    pub reputation_mult: f64,
+    pub reputation_max: f64,
+    pub grudge_below: f64,
+    pub grudge_mult: f64,
+    pub grudge_max: f64,
+}
+
+/// 宣战与讲和。
+#[derive(Debug, Clone, Deserialize)]
+pub struct WarConfig {
+    /// 国家之间没有理由开战扣的风评
+    pub unjustified_penalty: f64,
+    /// 讲和之后多少回合不能再开战
+    pub truce_turns: u32,
+    /// 封臣没有执行国战任务扣的风评
+    pub task_penalty: f64,
+    /// 国君制止后封臣还动手，每次扣的风评
+    pub defy_penalty: f64,
+}
+
+/// 粮道。
+#[derive(Debug, Clone, Deserialize)]
+pub struct SupplyConfig {
+    /// 走粮道的兵种
+    pub unit: String,
+    /// 一条粮道的辎重兵人数，和粮道长短、前线人数无关
+    pub convoy: u32,
+    /// 粮道每多一格，军粮多耗的比例
+    pub per_cell: f64,
+    /// 断粮的第 n 个回合，战斗力再降 n × starve_rate
+    pub starve_rate: f64,
+}
+
+/// 视野。
+#[derive(Debug, Clone, Deserialize)]
+pub struct VisionConfig {
+    /// 城的地块再往外几格
+    pub city: u32,
+    /// 军队所在的格子再往外几格，兵种可以另设
+    pub army: u32,
+    /// 别人的城看得到的大致人口，从小到大
+    pub tiers: Vec<SizeTier>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SizeTier {
+    pub min: u32,
+    pub name: String,
+}
+
+/// 劫掠市民的代价
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlunderConfig {
+    pub happiness_loss: f64,
+    pub loyalty_loss: f64,
+    pub reputation_loss: f64,
+}
+
+/// 兵种。装备按每人多少件算，编军队时从府库领，精品也算。
+#[derive(Debug, Clone, Deserialize)]
+pub struct UnitDef {
+    pub name: String,
+    /// 必需的装备，缺了战斗力打折
+    #[serde(default)]
+    pub gear: Inventory,
+    /// 可以选带的装备，比如步兵的甲、弓矢、攻城机
+    #[serde(default)]
+    pub optional: Inventory,
+    /// 每回合的行军力
+    pub moves: u32,
+    /// 每人的近战攻击、防御
+    pub attack: f64,
+    pub defense: f64,
+    /// 带了弓矢的人每人的远程攻击；不填表示不能远程
+    #[serde(default)]
+    pub ranged: f64,
+    /// 打完还能接着走，比如骑兵
+    #[serde(default)]
+    pub move_after_attack: bool,
+    /// 视野，不写就按 vision.army
+    #[serde(default)]
+    pub vision: Option<u32>,
+    /// 这个兵种走某些地形时的耗时，取代地形本身的 move_cost，比如车兵进山林慢
+    #[serde(default)]
+    pub terrain_cost: BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -255,6 +400,17 @@ pub struct TerrainDef {
     /// 开垦需要的人力（人 × 回合）
     #[serde(default)]
     pub reclaim_labor: f64,
+    /// 军队走进这种地形的一格要花的行军力；不填表示过不去（高山、大河）
+    pub move_cost: Option<u32>,
+    /// 守在这种地形上的军队防御增加的比例
+    #[serde(default)]
+    pub defense_bonus: f64,
+}
+
+impl TerrainDef {
+    pub fn passable(&self) -> bool {
+        self.move_cost.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -351,7 +507,10 @@ impl Config {
 
     /// 一堆物品按价值折算的总量。
     pub fn value_of(&self, inventory: &Inventory) -> f64 {
-        inventory.iter().map(|(good, amount)| self.goods.get(good).map_or(0.0, |g| g.value) * amount).sum()
+        inventory
+            .iter()
+            .map(|(good, amount)| self.goods.get(good).map_or(0.0, |g| g.value) * amount)
+            .sum()
     }
 
     /// 忠诚度低带来的倍率：忠诚度不低于 threshold 时为 1，为 0 时为 `at_zero`，中间线性插值。
@@ -375,15 +534,23 @@ impl Config {
         if let Some(terrain) = &recipe.resource {
             return Some(Pool::Terrain(terrain.clone()));
         }
-        let from_buildings = self.buildings.values().any(|b| b.jobs.contains_key(recipe_id));
+        let from_buildings = self
+            .buildings
+            .values()
+            .any(|b| b.jobs.contains_key(recipe_id));
         (recipe.base_jobs.is_some() || from_buildings).then(|| Pool::Recipe(recipe_id.to_string()))
     }
 
     /// 建筑里能不能劳作：给配方提供劳作位置，或者是某个配方要求的设施。
     /// 只有这类建筑区分官营民营，城墙、宫殿这类的效果对全城生效。
     pub fn is_workplace(&self, building: &str) -> bool {
-        self.buildings.get(building).is_some_and(|b| !b.jobs.is_empty())
-            || self.recipes.values().any(|r| r.facility.as_deref() == Some(building))
+        self.buildings
+            .get(building)
+            .is_some_and(|b| !b.jobs.is_empty())
+            || self
+                .recipes
+                .values()
+                .any(|r| r.facility.as_deref() == Some(building))
     }
 
     pub fn pool_name<'a>(&'a self, pool: &'a Pool) -> &'a str {
@@ -414,19 +581,31 @@ impl Config {
         }
         let mut symbols = std::collections::BTreeSet::new();
         for (id, terrain) in &self.terrains {
-            if terrain.symbol.split_whitespace().count() != 1 || terrain.symbol == "·" || !symbols.insert(&terrain.symbol) {
-                return invalid(format!("地形「{id}」的 symbol 必须是一个不含空格、不重复、不是「·」的符号"));
+            if terrain.symbol.split_whitespace().count() != 1
+                || terrain.symbol == "·"
+                || !symbols.insert(&terrain.symbol)
+            {
+                return invalid(format!(
+                    "地形「{id}」的 symbol 必须是一个不含空格、不重复、不是「·」的符号"
+                ));
             }
         }
         if self.happiness.busy_penalty.len() != seasons {
             return invalid("happiness.busy_penalty 长度必须等于季节数".into());
         }
         if !self.skills.contains_key(&self.happiness.busy_skill) {
-            return invalid(format!("happiness.busy_skill「{}」不在 skills 中", self.happiness.busy_skill));
+            return invalid(format!(
+                "happiness.busy_skill「{}」不在 skills 中",
+                self.happiness.busy_skill
+            ));
         }
         let f = &self.fief;
-        if !(0.0..=1.0).contains(&f.auto_rate) || f.excessive_ratio <= 0.0 || f.hostility_max <= 0.0 {
-            return invalid("fief.auto_rate 必须在 0 到 1 之间，excessive_ratio 和 hostility_max 必须大于 0".into());
+        if !(0.0..=1.0).contains(&f.auto_rate) || f.excessive_ratio <= 0.0 || f.hostility_max <= 0.0
+        {
+            return invalid(
+                "fief.auto_rate 必须在 0 到 1 之间，excessive_ratio 和 hostility_max 必须大于 0"
+                    .into(),
+            );
         }
         if self.neighbor.bonus < 0.0 || self.neighbor.max < 0.0 {
             return invalid("neighbor.bonus 和 neighbor.max 不能为负".into());
@@ -444,10 +623,17 @@ impl Config {
             return invalid("quality.fine_share 的长度必须等于 max_skills".into());
         }
         if !self.skills.contains_key(&self.population.initial_skill) {
-            return invalid(format!("population.initial_skill「{}」不在 skills 中", self.population.initial_skill));
+            return invalid(format!(
+                "population.initial_skill「{}」不在 skills 中",
+                self.population.initial_skill
+            ));
         }
         let l = &self.loyalty;
-        for (name, value) in [("guan_turnout", l.guan_turnout), ("tax_share", l.tax_share), ("min_output", l.min_output)] {
+        for (name, value) in [
+            ("guan_turnout", l.guan_turnout),
+            ("tax_share", l.tax_share),
+            ("min_output", l.min_output),
+        ] {
             if !(0.0..=1.0).contains(&value) {
                 return invalid(format!("loyalty.{name} 必须在 0 到 1 之间"));
             }
@@ -455,7 +641,7 @@ impl Config {
         if self.quota.exceed_ratio < 1.0 {
             return invalid("quota.exceed_ratio 不能小于 1".into());
         }
-                if self.learning.turns == 0 {
+        if self.learning.turns == 0 {
             return invalid("learning.turns 必须大于 0".into());
         }
         if !self.skills.contains_key(&self.shi.skill) {
@@ -464,7 +650,9 @@ impl Config {
         let check_goods = |inv: &Inventory, owner: &str| -> Result<(), ConfigError> {
             for good in inv.0.keys() {
                 if !self.goods.contains_key(good) {
-                    return Err(ConfigError::Invalid(format!("{owner} 引用了不存在的物品「{good}」")));
+                    return Err(ConfigError::Invalid(format!(
+                        "{owner} 引用了不存在的物品「{good}」"
+                    )));
                 }
             }
             Ok(())
@@ -539,9 +727,13 @@ impl Config {
             check_goods(&building.materials, &format!("建筑「{id}」"))?;
             for recipe in building.jobs.keys() {
                 match self.recipes.get(recipe) {
-                    None => return invalid(format!("建筑「{id}」提供容量的配方「{recipe}」不存在")),
+                    None => {
+                        return invalid(format!("建筑「{id}」提供容量的配方「{recipe}」不存在"));
+                    }
                     Some(r) if r.resource.is_some() => {
-                        return invalid(format!("建筑「{id}」不能给靠地块劳作的配方「{recipe}」提供容量"));
+                        return invalid(format!(
+                            "建筑「{id}」不能给靠地块劳作的配方「{recipe}」提供容量"
+                        ));
                     }
                     Some(_) => {}
                 }
@@ -550,7 +742,75 @@ impl Config {
         if self.reclaim.season_mult.len() != seasons {
             return invalid("reclaim.season_mult 长度必须等于季节数".into());
         }
+        let m = &self.military;
+        if !self.skills.contains_key(&m.skill) {
+            return invalid(format!("military.skill「{}」不在 skills 中", m.skill));
+        }
+        if !(0.0..=1.0).contains(&m.unequipped_mult) {
+            return invalid("military.unequipped_mult 必须在 0 到 1 之间".into());
+        }
+        if !self.buildings.contains_key(&self.siege.wall_building)
+            || !self.goods.contains_key(&self.siege.engine_good)
+            || !self.skills.contains_key(&self.siege.repair_skill)
+        {
+            return invalid("siege 的 wall_building、engine_good、repair_skill 必须存在".into());
+        }
+        if self.siege.wall_hp <= 0.0 || self.siege.center_hp <= 0.0 || self.combat.lethality <= 0.0
+        {
+            return invalid("siege.wall_hp、center_hp 和 combat.lethality 必须大于 0".into());
+        }
+        for (id, good) in &self.goods {
+            if !self.categories.contains_key(&good.category) {
+                return invalid(format!(
+                    "物品「{id}」的类别「{}」不在 categories 中",
+                    good.category
+                ));
+            }
+        }
+        let tiers = &self.vision.tiers;
+        if tiers.first().is_none_or(|t| t.min != 0)
+            || tiers.windows(2).any(|w| w[0].min >= w[1].min)
+        {
+            return invalid("vision.tiers 要从 min = 0 开始，按 min 从小到大排".into());
+        }
+        let sp = &self.supply;
+        if !self.units.contains_key(&sp.unit) || sp.convoy == 0 {
+            return invalid("supply.unit 必须是兵种，supply.convoy 必须大于 0".into());
+        }
+        if sp.per_cell < 0.0 || sp.starve_rate <= 0.0 {
+            return invalid("supply.per_cell 不能小于 0，supply.starve_rate 必须大于 0".into());
+        }
+        for (id, unit) in &self.units {
+            if unit.moves == 0 {
+                return invalid(format!("兵种「{id}」的 moves 必须大于 0"));
+            }
+            for (terrain, cost) in &unit.terrain_cost {
+                if !self.terrains.get(terrain).is_some_and(|t| t.passable()) || *cost == 0 {
+                    return invalid(format!(
+                        "兵种「{id}」的 terrain_cost 里「{terrain}」不是能走的地形，或者耗时为 0"
+                    ));
+                }
+            }
+            for (good, amount) in unit.gear.iter().chain(unit.optional.iter()) {
+                if !self.goods.contains_key(good) || *amount <= 0.0 {
+                    return invalid(format!("兵种「{id}」的装备「{good}」不存在或数量不大于 0"));
+                }
+                if unit.gear.get(good) > 0.0 && unit.optional.get(good) > 0.0 {
+                    return invalid(format!("兵种「{id}」的装备「{good}」不能既必需又可选"));
+                }
+            }
+        }
         for (id, terrain) in &self.terrains {
+            if terrain.move_cost == Some(0) {
+                return invalid(format!(
+                    "地形「{id}」的 move_cost 必须大于 0；过不去的地形不写 move_cost"
+                ));
+            }
+            if !terrain.passable()
+                && (terrain.reclaim_skill.is_some() || terrain.housing > 0 || terrain.jobs > 0)
+            {
+                return invalid(format!("地形「{id}」过不去，不能住人、劳作或开垦"));
+            }
             if let Some(skill) = &terrain.reclaim_skill {
                 if !self.skills.contains_key(skill) {
                     return invalid(format!("地块「{id}」的开垦技能「{skill}」不存在"));

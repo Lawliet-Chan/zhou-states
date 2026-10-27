@@ -5,12 +5,17 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::army::{self, SquadOrder};
+use crate::combat::{self, Appointee, PlunderTarget};
 use crate::config::Config;
 use crate::deal::{self, Deal, Stake};
 use crate::fief;
 use crate::inventory::Inventory;
 use crate::map::Hex;
-use crate::state::{Assignment, City, CityStatus, GameState, Id, Learning, Mode, Official, Quota, Task, Tribute};
+use crate::state::{
+    Assignment, City, CityStatus, GameState, Id, Learning, Mode, Official, Quota, Task, Tribute,
+};
+use crate::war::{self, Party};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -25,7 +30,10 @@ pub enum Command {
         drop_skill: Option<String>,
     },
     /// 罢免士人，他回到原来的人群
-    DismissShi { city: Id, shi: Id },
+    DismissShi {
+        city: Id,
+        shi: Id,
+    },
     /// 派士人主事一项工事
     StartAssignment {
         city: Id,
@@ -34,10 +42,19 @@ pub enum Command {
         #[serde(default)]
         workers: BTreeMap<Id, u32>,
     },
-    CancelAssignment { city: Id, assignment: Id },
-    SetTaxRate { city: Id, rate: f64 },
+    CancelAssignment {
+        city: Id,
+        assignment: Id,
+    },
+    SetTaxRate {
+        city: Id,
+        rate: f64,
+    },
     /// 赏赐民众：把府库中的物资转入民间财富
-    Grant { city: Id, goods: Inventory },
+    Grant {
+        city: Id,
+        goods: Inventory,
+    },
     /// 让一群人中的 `count` 人学一项新技能，不需要士人主事。正在做工事的人也可以学，学习期间照常干活。
     /// 技能槽已满时需要指定丢弃的旧技能。学成后这些人分出去，或并入技能槽相同的人群
     LearnSkill {
@@ -49,28 +66,58 @@ pub enum Command {
         drop_skill: Option<String>,
     },
     /// 所有者任命某人为管理者，对方接受后才生效
-    OfferManagement { city: Id, to: Id },
+    OfferManagement {
+        city: Id,
+        to: Id,
+    },
     /// 被任命的人接受任命，成为管理者
-    AcceptManagement { city: Id },
+    AcceptManagement {
+        city: Id,
+    },
     /// 被任命的人拒绝任命
-    DeclineManagement { city: Id },
+    DeclineManagement {
+        city: Id,
+    },
     /// 所有者收回管理权，自己管理。不需要管理者同意
-    RevokeManagement { city: Id },
+    RevokeManagement {
+        city: Id,
+    },
     /// 所有者给管理者设定规定任务：每年要上缴的物资。为空表示取消
-    SetQuota { city: Id, goods: Inventory },
+    SetQuota {
+        city: Id,
+        goods: Inventory,
+    },
     /// 管理者从府库上缴物资到所有者的私库，计入今年的规定任务
-    Deliver { city: Id, goods: Inventory },
+    Deliver {
+        city: Id,
+        goods: Inventory,
+    },
     /// 所有者把城市封授给别人，对方接受后才生效。封出去的城不能收回
-    OfferFief { city: Id, to: Id },
+    OfferFief {
+        city: Id,
+        to: Id,
+    },
     /// 受封：成为这座城的所有者，原所有者成为封君
-    AcceptFief { city: Id },
-    DeclineFief { city: Id },
+    AcceptFief {
+        city: Id,
+    },
+    DeclineFief {
+        city: Id,
+    },
     /// 封君指定每年的纳贡，取代按比例自动纳贡。为空表示恢复自动纳贡
-    SetTribute { city: Id, goods: Inventory },
+    SetTribute {
+        city: Id,
+        goods: Inventory,
+    },
     /// 封臣拒绝过火的纳贡
-    RefuseTribute { city: Id },
+    RefuseTribute {
+        city: Id,
+    },
     /// 封臣从府库纳贡到封君的私库，计入今年指定的纳贡
-    PayTribute { city: Id, goods: Inventory },
+    PayTribute {
+        city: Id,
+        goods: Inventory,
+    },
     /// 向某人提出赠与（只给）、索取（只要）或交易（有给有要），对方接受就立即成交。
     /// `into`：自己收到的物资放进哪座城的府库，不填为私库
     ProposeDeal {
@@ -88,14 +135,114 @@ pub enum Command {
         #[serde(default)]
         into: Option<Id>,
     },
-    DeclineDeal { deal: Id },
+    DeclineDeal {
+        deal: Id,
+    },
     /// 提议的人撤回
-    CancelDeal { deal: Id },
+    CancelDeal {
+        deal: Id,
+    },
     /// 搬去另一座城待着。平时只能搬去自己拥有的城
-    MoveTo { city: Id },
+    MoveTo {
+        city: Id,
+    },
+    /// 征发：城主从城里会「军武」的人中抽人编成一支军队，装备从府库领。城被攻占时由占领者征发
+    RaiseArmy {
+        city: Id,
+        squads: Vec<SquadOrder>,
+    },
+    /// 行军：只指定目的地，自动按最短路线走，没有通行权的城自动绕开。这回合走不到，之后的回合接着走。
+    /// 目的地就是现在的位置时，取消行军
+    MarchArmy {
+        army: Id,
+        to: Hex,
+        /// 硬闯：没有通行权的城也穿过去，走进去就是对城主宣战
+        #[serde(default)]
+        force: bool,
+    },
+    /// 攻击某一格：敌城的地就攻城（城墙立着时打城墙），有敌军就打敌军。
+    /// 近战要相邻；`ranged` 为远程（弓矢、攻城机），隔一格也能打
+    Attack {
+        army: Id,
+        at: Hex,
+        #[serde(default)]
+        ranged: bool,
+    },
+    /// 宣战。只有国君能对别国宣战（国战）；对别国的人宣战就是对这个国家宣战。
+    /// 国与国之间、同一国的封臣之间没有理由开战扣风评；牵涉无国籍的人不用理由
+    DeclareWar {
+        target: Party,
+    },
+    /// 国君制止本国两名封臣之间的战争，封臣再动手就扣风评
+    HaltWar {
+        war: Id,
+    },
+    /// 国战中国君给封臣定军事任务：攻打哪座城
+    AssignMilitaryTask {
+        war: Id,
+        vassal: Id,
+        city: Id,
+    },
+    /// 提出讲和：`give` 是自己交出的，`take` 是要对方交出的。只给不要就是投降。当回合有效
+    ProposePeace {
+        war: Id,
+        #[serde(default)]
+        give: crate::deal::Stake,
+        #[serde(default)]
+        take: crate::deal::Stake,
+    },
+    /// 接受讲和：交割条件，战争结束，之后若干回合不能再开战
+    AcceptPeace {
+        war: Id,
+    },
+    DeclinePeace {
+        war: Id,
+    },
+    /// 进驻或离开城墙：墙上的守军能还手，城墙一破就随之覆灭
+    ManWall {
+        army: Id,
+        on: bool,
+    },
+    /// 开粮道：从起点城 `from` 的一群会「军武」的人里抽出辎重兵，给出征的军队供粮
+    OpenSupplyLine {
+        army: Id,
+        from: Id,
+        group: Id,
+    },
+    /// 撤粮道：辎重兵回起点城
+    CloseSupplyLine {
+        army: Id,
+    },
+    /// 遣散：军队回到编成它的城的地上就能遣散，人回原来的岗位，装备还回府库
+    DisbandArmy {
+        army: Id,
+    },
+    /// 占领者选人接管被攻占的城：一个人物，或者自己管的城里的一名士人
+    AppointOccupationManager {
+        city: Id,
+        appointee: Appointee,
+    },
+    /// 占领者劫掠府库或民间的财物：`categories` 是要抢的物品类别，不写就全拿。每座城每回合只能劫掠一次
+    Plunder {
+        city: Id,
+        target: PlunderTarget,
+        #[serde(default)]
+        categories: Vec<String>,
+    },
+    /// 占领者毁掉一块地上的一座建筑
+    Raze {
+        city: Id,
+        tile: Id,
+        building: String,
+    },
     /// 丢弃技能、调整技能顺序，当回合生效。`skills` 只能由这群人现有的技能组成，顺序即优先顺序。
     /// 正在学技能的人要等学成再调整
-    ArrangeSkills { city: Id, group: Id, count: u32, skills: Vec<String> },
+    ArrangeSkills {
+        city: Id,
+        group: Id,
+        count: u32,
+        skills: Vec<String>,
+    },
 }
 
 impl Command {
@@ -121,12 +268,28 @@ impl Command {
             | Command::DeclineFief { city }
             | Command::SetTribute { city, .. }
             | Command::RefuseTribute { city }
-            | Command::PayTribute { city, .. } => *city,
+            | Command::PayTribute { city, .. }
+            | Command::RaiseArmy { city, .. }
+            | Command::Plunder { city, .. }
+            | Command::AppointOccupationManager { city, .. }
+            | Command::Raze { city, .. } => *city,
             Command::ProposeDeal { .. }
             | Command::AcceptDeal { .. }
             | Command::DeclineDeal { .. }
             | Command::CancelDeal { .. }
-            | Command::MoveTo { .. } => return None,
+            | Command::MoveTo { .. }
+            | Command::DisbandArmy { .. }
+            | Command::OpenSupplyLine { .. }
+            | Command::CloseSupplyLine { .. }
+            | Command::MarchArmy { .. }
+            | Command::Attack { .. }
+            | Command::ManWall { .. }
+            | Command::DeclareWar { .. }
+            | Command::HaltWar { .. }
+            | Command::AssignMilitaryTask { .. }
+            | Command::ProposePeace { .. }
+            | Command::AcceptPeace { .. }
+            | Command::DeclinePeace { .. } => return None,
         })
     }
 }
@@ -139,6 +302,64 @@ pub enum CommandError {
     ZeroPassageTurns,
     #[error("你已经在城市 {0} 了")]
     AlreadyThere(Id),
+    #[error("军队里一个兵都没有")]
+    EmptyArmy,
+    #[error("兵种「{0}」不存在")]
+    NoSuchUnit(String),
+    #[error("{unit}不能带「{good}」")]
+    NotOptionalGear { unit: String, good: String },
+    #[error("军队 {0} 不存在")]
+    NoSuchArmy(Id),
+    #[error("你不统领军队 {0}")]
+    NotCommander(Id),
+    #[error("走不到 {0}：过不去的地形、没有通行权的城或者别人的军队挡住了路")]
+    NoPath(Hex),
+    #[error("国家 {0} 不存在")]
+    NoSuchCountry(Id),
+    #[error("不能对自己或自己的国家宣战")]
+    OwnCountry,
+    #[error("封臣不能对别国宣战，只有国君才能发动国战")]
+    VassalCannotDeclare,
+    #[error("已经在和对方交战")]
+    AlreadyAtWar,
+    #[error("还在停战期内，不能开战")]
+    Truce,
+    #[error("战争 {0} 不存在")]
+    NoSuchWar(Id),
+    #[error("你不是国君，或者这不是你国内的事")]
+    NotRuler,
+    #[error("人物 {0} 不是你国内的封臣")]
+    NotYourVassal(Id),
+    #[error("城市 {0} 不是敌方的城")]
+    NotEnemyCity(Id),
+    #[error("你不是战争 {0} 里拿主意的人")]
+    NotWarLeader(Id),
+    #[error("战争 {0} 没有等你答复的讲和")]
+    NoPeaceOffer(Id),
+    #[error("军队 {0} 这回合已经攻击过，或者没有行军力了")]
+    AlreadyActed(Id),
+    #[error("{0} 不在攻击范围内：近战要相邻，远程最多隔一格")]
+    OutOfRange(Hex),
+    #[error("军队 {0} 没有能这样攻击的兵（远程要带弓矢或攻城机）")]
+    CannotAttack(Id),
+    #[error("{0} 没有能攻击的敌人")]
+    NothingToAttack(Hex),
+    #[error("城市 {0} 里还有守军，要先打败他们")]
+    GarrisonRemains(Id),
+    #[error("你没有攻占城市 {0}")]
+    NotOccupier(Id),
+    #[error("物品类别「{0}」不存在")]
+    NoSuchCategory(String),
+    #[error("城市 {0} 这回合已经被劫掠过")]
+    AlreadyPlundered(Id),
+    #[error("军队 {0} 已经有粮道")]
+    SupplyLineExists(Id),
+    #[error("军队 {0} 没有粮道")]
+    NoSupplyLine(Id),
+    #[error("找不到给军队 {0} 送粮的路")]
+    NoSupplyRoute(Id),
+    #[error("军队 {0} 要回到自己的城里才能遣散")]
+    NotHome(Id),
     #[error("城市 {0} 不存在")]
     NoSuchCity(Id),
     #[error("你不是城市 {0} 的管理者，城中的士人不听你的")]
@@ -204,7 +425,11 @@ pub enum CommandError {
     #[error("人数必须大于 0")]
     ZeroCount,
     #[error("人群 {group} 只有 {available} 人未被管理，不足 {requested} 人")]
-    NotEnoughUnmanaged { group: Id, available: u32, requested: u32 },
+    NotEnoughUnmanaged {
+        group: Id,
+        available: u32,
+        requested: u32,
+    },
     #[error("技能槽已满，需要先指定丢弃一项旧技能")]
     SkillSlotsFull,
     #[error("人群没有要丢弃的技能「{0}」")]
@@ -222,7 +447,11 @@ pub enum CommandError {
     #[error("府库材料不足")]
     MissingMaterials,
     #[error("人群 {group} 只有 {available} 人尚未被收税覆盖，不足 {requested} 人")]
-    NotEnoughUntaxed { group: Id, available: u32, requested: u32 },
+    NotEnoughUntaxed {
+        group: Id,
+        available: u32,
+        requested: u32,
+    },
     #[error("祭祀不需要投入人口")]
     SacrificeTakesNoWorkers,
     #[error("府库中没有礼器，无法祭祀")]
@@ -230,7 +459,11 @@ pub enum CommandError {
     #[error("税率必须在 0 到 {0} 之间")]
     InvalidTaxRate(f64),
     #[error("「{pool}」只能再容纳 {available} 人劳作，不足 {requested} 人")]
-    NoJobs { pool: String, available: u32, requested: u32 },
+    NoJobs {
+        pool: String,
+        available: u32,
+        requested: u32,
+    },
     #[error("人群 {group} 的专精度不够，做不了「{recipe}」")]
     SpecializationTooLow { group: Id, recipe: String },
     #[error("地块 {0} 不存在")]
@@ -248,13 +481,23 @@ pub enum CommandError {
     #[error("技能「{0}」不存在")]
     NoSuchSkill(String),
     #[error("人群 {group} 只有 {available} 人没在学技能，不足 {requested} 人")]
-    NotEnoughNotLearning { group: Id, available: u32, requested: u32 },
+    NotEnoughNotLearning {
+        group: Id,
+        available: u32,
+        requested: u32,
+    },
     #[error("这群人已经会「{0}」")]
     AlreadyHasSkill(String),
     #[error("这块地上的建筑已满")]
     NoBuildingSlot,
     #[error("「{0}」不能建在这种地上")]
     WrongTerrain(String),
+    #[error("城里没有城墙")]
+    NoWall,
+    #[error("城墙完好，不用修")]
+    WallIntact,
+    #[error("已经在修城墙了")]
+    AlreadyRepairing,
     #[error("地图上没有 {0} 这一格")]
     NoSuchCell(Hex),
     #[error("{at} 已经是{city}的地")]
@@ -281,20 +524,34 @@ fn mode_name(mode: Mode) -> &'static str {
 }
 
 /// 人物 `actor` 发出一条指令：先检查权限，再执行。返回新创建的实体 id（任用的士人、新开的工事、学技能的批次、调整技能后归入的人群）。
-pub fn apply(state: &mut GameState, config: &Config, actor: Id, command: &Command) -> Result<Vec<Id>, CommandError> {
+pub fn apply(
+    state: &mut GameState,
+    config: &Config,
+    actor: Id,
+    command: &Command,
+) -> Result<Vec<Id>, CommandError> {
     let result = apply_inner(state, config, actor, command);
     // 城送了人、封了出去之后，原来待在那里的人回到默认的地方
     if result.is_ok() {
         state.settle_locations();
+        crate::vision::observe(state, config);
     }
     result
 }
 
-fn apply_inner(state: &mut GameState, config: &Config, actor: Id, command: &Command) -> Result<Vec<Id>, CommandError> {
+fn apply_inner(
+    state: &mut GameState,
+    config: &Config,
+    actor: Id,
+    command: &Command,
+) -> Result<Vec<Id>, CommandError> {
     let Some(city_id) = command.city() else {
         return apply_personal(state, config, actor, command);
     };
-    let city = state.cities.get(&city_id).ok_or(CommandError::NoSuchCity(city_id))?;
+    let city = state
+        .cities
+        .get(&city_id)
+        .ok_or(CommandError::NoSuchCity(city_id))?;
     match command {
         Command::OfferManagement { to, .. } => {
             check_owner(city, actor)?;
@@ -343,7 +600,10 @@ fn apply_inner(state: &mut GameState, config: &Config, actor: Id, command: &Comm
             } else {
                 // 改任务不清零今年已经上缴的
                 let delivered = city.quota.take().map(|q| q.delivered).unwrap_or_default();
-                city.quota = Some(Quota { goods: goods.clone(), delivered });
+                city.quota = Some(Quota {
+                    goods: goods.clone(),
+                    delivered,
+                });
             }
             Ok(vec![])
         }
@@ -355,9 +615,16 @@ fn apply_inner(state: &mut GameState, config: &Config, actor: Id, command: &Comm
             if *to == actor {
                 return Err(CommandError::CannotEnfeoffSelf);
             }
-            let target = state.characters.get(to).ok_or(CommandError::NoSuchCharacter(*to))?;
+            let target = state
+                .characters
+                .get(to)
+                .ok_or(CommandError::NoSuchCharacter(*to))?;
             // 上司：自己替他管城的人
-            if state.cities.values().any(|c| c.owner == Some(*to) && c.manager == Some(actor)) {
+            if state
+                .cities
+                .values()
+                .any(|c| c.owner == Some(*to) && c.manager == Some(actor))
+            {
                 return Err(CommandError::CannotEnfeoffSuperior(*to));
             }
             check_same_country(state, actor, target.id)?;
@@ -376,7 +643,10 @@ fn apply_inner(state: &mut GameState, config: &Config, actor: Id, command: &Comm
             if !state.ruler_keeps_a_city(liege, &[city_id]) {
                 return Err(CommandError::RulerMustKeepACity);
             }
-            let manages_other = state.cities.values().any(|c| c.id != city_id && c.manager == Some(actor));
+            let manages_other = state
+                .cities
+                .values()
+                .any(|c| c.id != city_id && c.manager == Some(actor));
             let nationality = state.characters.get(&liege).and_then(|c| c.nationality);
             let city = city_mut(state, city_id)?;
             city.owner = Some(actor);
@@ -390,6 +660,8 @@ fn apply_inner(state: &mut GameState, config: &Config, actor: Id, command: &Comm
             for group in city.groups.values_mut() {
                 group.hostility = 0.0;
             }
+            army::transfer(state, city_id, actor);
+            let city = city_mut(state, city_id)?;
             // 管理权归受封者；他已经在管别的城时，这座城先没有管理者，等他任命别人
             if manages_other {
                 city.manager = None;
@@ -423,7 +695,11 @@ fn apply_inner(state: &mut GameState, config: &Config, actor: Id, command: &Comm
             } else {
                 // 改了纳贡要重新答复；今年已经纳的照样算
                 let delivered = city.tribute.take().map(|t| t.delivered).unwrap_or_default();
-                city.tribute = Some(Tribute { goods: goods.clone(), delivered, refused: false });
+                city.tribute = Some(Tribute {
+                    goods: goods.clone(),
+                    delivered,
+                    refused: false,
+                });
             }
             Ok(vec![])
         }
@@ -439,7 +715,11 @@ fn apply_inner(state: &mut GameState, config: &Config, actor: Id, command: &Comm
             if fief::overreach(city, config, months).is_none() {
                 return Err(CommandError::TributeNotExcessive);
             }
-            city_mut(state, city_id)?.tribute.as_mut().expect("checked above").refused = true;
+            city_mut(state, city_id)?
+                .tribute
+                .as_mut()
+                .expect("checked above")
+                .refused = true;
             Ok(vec![])
         }
         Command::PayTribute { goods, .. } => {
@@ -458,6 +738,16 @@ fn apply_inner(state: &mut GameState, config: &Config, actor: Id, command: &Comm
                 liege.private_store.add_all(&paid);
             }
             Ok(vec![])
+        }
+        Command::RaiseArmy { squads, .. } => army::raise(state, config, actor, city_id, squads),
+        Command::Plunder {
+            target, categories, ..
+        } => combat::plunder(state, config, actor, city_id, *target, categories),
+        Command::AppointOccupationManager { appointee, .. } => {
+            combat::appoint_occupation_manager(state, config, actor, city_id, appointee)
+        }
+        Command::Raze { tile, building, .. } => {
+            combat::raze(state, actor, city_id, *tile, building)
         }
         // 其余指令都是管理城内事务，只有管理者能发
         _ => {
@@ -481,10 +771,26 @@ fn check_owner(city: &City, actor: Id) -> Result<(), CommandError> {
 }
 
 /// 人物自己的事：赠与、索取、交易，搬家。
-fn apply_personal(state: &mut GameState, config: &Config, actor: Id, command: &Command) -> Result<Vec<Id>, CommandError> {
-    let pending = |state: &GameState, id: Id| state.deals.get(&id).cloned().ok_or(CommandError::NoSuchDeal(id));
+fn apply_personal(
+    state: &mut GameState,
+    config: &Config,
+    actor: Id,
+    command: &Command,
+) -> Result<Vec<Id>, CommandError> {
+    let pending = |state: &GameState, id: Id| {
+        state
+            .deals
+            .get(&id)
+            .cloned()
+            .ok_or(CommandError::NoSuchDeal(id))
+    };
     match command {
-        Command::ProposeDeal { to, give, take, into } => {
+        Command::ProposeDeal {
+            to,
+            give,
+            take,
+            into,
+        } => {
             if !state.characters.contains_key(to) {
                 return Err(CommandError::NoSuchCharacter(*to));
             }
@@ -498,7 +804,14 @@ fn apply_personal(state: &mut GameState, config: &Config, actor: Id, command: &C
             deal::check_stake(state, config, *to, take)?;
             deal::check_into(state, actor, *into, give)?;
             let id = state.alloc_id();
-            let deal = Deal { id, from: actor, to: *to, give: give.clone(), take: take.clone(), into: *into };
+            let deal = Deal {
+                id,
+                from: actor,
+                to: *to,
+                give: give.clone(),
+                take: take.clone(),
+                into: *into,
+            };
             state.deals.insert(id, deal);
             Ok(vec![id])
         }
@@ -526,15 +839,53 @@ fn apply_personal(state: &mut GameState, config: &Config, actor: Id, command: &C
             Ok(vec![])
         }
         Command::MoveTo { city } => {
-            let target = state.cities.get(city).ok_or(CommandError::NoSuchCity(*city))?;
+            let target = state
+                .cities
+                .get(city)
+                .ok_or(CommandError::NoSuchCity(*city))?;
             check_owner(target, actor)?;
-            let character = state.characters.get_mut(&actor).ok_or(CommandError::NoSuchCharacter(actor))?;
+            let character = state
+                .characters
+                .get_mut(&actor)
+                .ok_or(CommandError::NoSuchCharacter(actor))?;
             if character.location == Some(*city) {
                 return Err(CommandError::AlreadyThere(*city));
             }
             character.location = Some(*city);
             Ok(vec![])
         }
+        Command::DisbandArmy { army } => army::disband(state, config, actor, *army),
+        Command::OpenSupplyLine { army, from, group } => {
+            crate::supply::open(state, config, actor, *army, *from, *group)
+        }
+        Command::CloseSupplyLine { army } => crate::supply::close(state, config, actor, *army),
+        Command::MarchArmy { army, to, force } => {
+            army::order_march(state, config, actor, *army, *to, *force)
+        }
+        Command::Attack { army, at, ranged } => {
+            combat::attack(state, config, actor, *army, *at, *ranged)
+        }
+        Command::ManWall { army, on } => combat::man_wall(state, config, actor, *army, *on),
+        Command::DeclareWar { target } => {
+            let mut events = Vec::new();
+            let id = war::declare(state, config, actor, *target, &mut events)?;
+            state.pending_events.extend(events);
+            Ok(vec![id])
+        }
+        Command::HaltWar { war } => war::halt(state, actor, *war).map(|_| vec![]),
+        Command::AssignMilitaryTask { war, vassal, city } => {
+            war::assign_task(state, actor, *war, *vassal, *city).map(|_| vec![])
+        }
+        Command::ProposePeace { war, give, take } => {
+            war::propose_peace(state, config, actor, *war, give, take).map(|_| vec![])
+        }
+        Command::AcceptPeace { war } => {
+            let mut events = Vec::new();
+            war::accept_peace(state, config, actor, *war, &mut events)?;
+            state.pending_events.extend(events);
+            Ok(vec![])
+        }
+        Command::DeclinePeace { war } => war::decline_peace(state, actor, *war).map(|_| vec![]),
         _ => unreachable!("only personal commands have no city"),
     }
 }
@@ -552,14 +903,20 @@ fn check_liege(city: &City, actor: Id) -> Result<(), CommandError> {
 fn check_same_country(state: &GameState, liege: Id, vassal: Id) -> Result<(), CommandError> {
     let nationality = |id: Id| state.characters.get(&id).and_then(|c| c.nationality);
     match nationality(vassal) {
-        Some(country) if Some(country) != nationality(liege) => Err(CommandError::DifferentCountry(vassal)),
+        Some(country) if Some(country) != nationality(liege) => {
+            Err(CommandError::DifferentCountry(vassal))
+        }
         _ => Ok(()),
     }
 }
 
 /// 一个人只能直接管理一座城。
 fn check_manages_no_other(state: &GameState, city: Id, who: Id) -> Result<(), CommandError> {
-    if state.cities.values().any(|c| c.id != city && c.manager == Some(who)) {
+    if state
+        .cities
+        .values()
+        .any(|c| c.id != city && c.manager == Some(who))
+    {
         return Err(CommandError::ManagesAnotherCity(who));
     }
     Ok(())
@@ -593,14 +950,24 @@ fn check_treasury(config: &Config, city: &City, goods: &Inventory) -> Result<(),
 }
 
 /// 不检查权限直接执行，只用于剧本加载这类开局设置。
-pub(crate) fn execute(state: &mut GameState, config: &Config, command: &Command) -> Result<Vec<Id>, CommandError> {
+pub(crate) fn execute(
+    state: &mut GameState,
+    config: &Config,
+    command: &Command,
+) -> Result<Vec<Id>, CommandError> {
     match command {
-        Command::AppointShi { city, group, count, drop_skill } => {
-            appoint_shi(state, config, *city, *group, *count, drop_skill.as_deref())
-        }
+        Command::AppointShi {
+            city,
+            group,
+            count,
+            drop_skill,
+        } => appoint_shi(state, config, *city, *group, *count, drop_skill.as_deref()),
         Command::DismissShi { city, shi } => {
             let city = city_mut(state, *city)?;
-            let official = city.officials.get(shi).ok_or(CommandError::NoSuchOfficial(*shi))?;
+            let official = city
+                .officials
+                .get(shi)
+                .ok_or(CommandError::NoSuchOfficial(*shi))?;
             if city.assignment_of(*shi).is_some() {
                 return Err(CommandError::OfficialBusy(*shi));
             }
@@ -611,9 +978,12 @@ pub(crate) fn execute(state: &mut GameState, config: &Config, command: &Command)
             }
             Ok(vec![])
         }
-        Command::StartAssignment { city, shi, task, workers } => {
-            start_assignment(state, config, *city, *shi, task, workers)
-        }
+        Command::StartAssignment {
+            city,
+            shi,
+            task,
+            workers,
+        } => start_assignment(state, config, *city, *shi, task, workers),
         Command::CancelAssignment { city, assignment } => {
             let city = city_mut(state, *city)?;
             city.assignments
@@ -647,8 +1017,14 @@ pub(crate) fn execute(state: &mut GameState, config: &Config, command: &Command)
             }
             Ok(vec![])
         }
-        Command::Deliver { city: city_id, goods } => {
-            let city = state.cities.get(city_id).ok_or(CommandError::NoSuchCity(*city_id))?;
+        Command::Deliver {
+            city: city_id,
+            goods,
+        } => {
+            let city = state
+                .cities
+                .get(city_id)
+                .ok_or(CommandError::NoSuchCity(*city_id))?;
             // 被攻占的城和原所有者之间没有上下级关系，不用上缴
             if city.status == CityStatus::Occupied {
                 return Err(CommandError::CityOccupied(*city_id));
@@ -681,16 +1057,48 @@ pub(crate) fn execute(state: &mut GameState, config: &Config, command: &Command)
         | Command::RefuseTribute { city }
         | Command::PayTribute { city, .. } => Err(CommandError::NotOwner(*city)),
         Command::ProposeDeal { to, .. } => Err(CommandError::NoSuchCharacter(*to)),
-        Command::AcceptDeal { deal, .. } | Command::DeclineDeal { deal } | Command::CancelDeal { deal } => {
-            Err(CommandError::NotYourDeal(*deal))
+        Command::AcceptDeal { deal, .. }
+        | Command::DeclineDeal { deal }
+        | Command::CancelDeal { deal } => Err(CommandError::NotYourDeal(*deal)),
+        Command::MoveTo { city } | Command::RaiseArmy { city, .. } => {
+            Err(CommandError::NotOwner(*city))
         }
-        Command::MoveTo { city } => Err(CommandError::NotOwner(*city)),
-        Command::LearnSkill { city, group, count, skill, drop_skill } => {
-            learn_skill(state, config, *city, *group, *count, skill, drop_skill.as_deref())
-        }
-        Command::ArrangeSkills { city, group, count, skills } => {
-            arrange_skills(state, config, *city, *group, *count, skills)
-        }
+        Command::Plunder { city, .. }
+        | Command::Raze { city, .. }
+        | Command::AppointOccupationManager { city, .. } => Err(CommandError::NotOccupier(*city)),
+        Command::DisbandArmy { army }
+        | Command::OpenSupplyLine { army, .. }
+        | Command::CloseSupplyLine { army }
+        | Command::MarchArmy { army, .. }
+        | Command::Attack { army, .. }
+        | Command::ManWall { army, .. } => Err(CommandError::NotCommander(*army)),
+        Command::DeclareWar { .. } => Err(CommandError::OwnCountry),
+        Command::HaltWar { war }
+        | Command::AssignMilitaryTask { war, .. }
+        | Command::ProposePeace { war, .. }
+        | Command::AcceptPeace { war }
+        | Command::DeclinePeace { war } => Err(CommandError::NoSuchWar(*war)),
+        Command::LearnSkill {
+            city,
+            group,
+            count,
+            skill,
+            drop_skill,
+        } => learn_skill(
+            state,
+            config,
+            *city,
+            *group,
+            *count,
+            skill,
+            drop_skill.as_deref(),
+        ),
+        Command::ArrangeSkills {
+            city,
+            group,
+            count,
+            skills,
+        } => arrange_skills(state, config, *city, *group, *count, skills),
     }
 }
 
@@ -699,10 +1107,18 @@ fn check_not_learning(city: &City, group: Id, count: u32) -> Result<(), CommandE
     if count == 0 {
         return Err(CommandError::ZeroCount);
     }
-    let size = city.groups.get(&group).ok_or(CommandError::NoSuchGroup(group))?.size;
+    let size = city
+        .groups
+        .get(&group)
+        .ok_or(CommandError::NoSuchGroup(group))?
+        .size;
     let available = size.saturating_sub(city.learning_in(group));
     if count > available {
-        return Err(CommandError::NotEnoughNotLearning { group, available, requested: count });
+        return Err(CommandError::NotEnoughNotLearning {
+            group,
+            available,
+            requested: count,
+        });
     }
     Ok(())
 }
@@ -716,14 +1132,19 @@ fn learn_skill(
     skill: &str,
     drop_skill: Option<&str>,
 ) -> Result<Vec<Id>, CommandError> {
-    let city = state.cities.get(&city_id).ok_or(CommandError::NoSuchCity(city_id))?;
+    let city = state
+        .cities
+        .get(&city_id)
+        .ok_or(CommandError::NoSuchCity(city_id))?;
     check_not_learning(city, group_id, count)?;
     if !config.skills.contains_key(skill) {
         return Err(CommandError::NoSuchSkill(skill.to_string()));
     }
     let group = &city.groups[&group_id];
     if group.has_skill(skill) {
-        return Err(CommandError::AlreadyHasSkill(config.skill_name(skill).to_string()));
+        return Err(CommandError::AlreadyHasSkill(
+            config.skill_name(skill).to_string(),
+        ));
     }
     let mut skills = group.skills.clone();
     if skills.len() >= config.population.max_skills {
@@ -740,7 +1161,14 @@ fn learn_skill(
     let city = state.cities.get_mut(&city_id).expect("city checked above");
     city.learning.insert(
         id,
-        Learning { id, group: group_id, count, skills, skill: skill.to_string(), turns: 0 },
+        Learning {
+            id,
+            group: group_id,
+            count,
+            skills,
+            skill: skill.to_string(),
+            turns: 0,
+        },
     );
     Ok(vec![id])
 }
@@ -753,7 +1181,10 @@ fn arrange_skills(
     count: u32,
     skills: &[String],
 ) -> Result<Vec<Id>, CommandError> {
-    let city = state.cities.get(&city_id).ok_or(CommandError::NoSuchCity(city_id))?;
+    let city = state
+        .cities
+        .get(&city_id)
+        .ok_or(CommandError::NoSuchCity(city_id))?;
     check_not_learning(city, group_id, count)?;
     let current = &city.groups[&group_id].skills;
     let invalid = |msg: String| Err(CommandError::InvalidSkills(msg));
@@ -765,19 +1196,29 @@ fn arrange_skills(
     }
     for (i, skill) in skills.iter().enumerate() {
         if !current.contains(skill) {
-            return invalid(format!("这群人不会「{}」，新技能要通过学技能获得", config.skill_name(skill)));
+            return invalid(format!(
+                "这群人不会「{}」，新技能要通过学技能获得",
+                config.skill_name(skill)
+            ));
         }
         if skills[..i].contains(skill) {
             return invalid(format!("技能「{}」重复", config.skill_name(skill)));
         }
     }
-    let GameState { cities, next_id, .. } = state;
+    let GameState {
+        cities, next_id, ..
+    } = state;
     let city = cities.get_mut(&city_id).expect("city checked above");
-    Ok(vec![city.move_people(config, group_id, count, skills, next_id)])
+    Ok(vec![
+        city.move_people(config, group_id, count, skills, next_id),
+    ])
 }
 
 fn city_mut(state: &mut GameState, city: Id) -> Result<&mut City, CommandError> {
-    state.cities.get_mut(&city).ok_or(CommandError::NoSuchCity(city))
+    state
+        .cities
+        .get_mut(&city)
+        .ok_or(CommandError::NoSuchCity(city))
 }
 
 fn appoint_shi(
@@ -791,11 +1232,21 @@ fn appoint_shi(
     if count == 0 {
         return Err(CommandError::ZeroCount);
     }
-    let city = state.cities.get(&city_id).ok_or(CommandError::NoSuchCity(city_id))?;
-    let group = city.groups.get(&group_id).ok_or(CommandError::NoSuchGroup(group_id))?;
+    let city = state
+        .cities
+        .get(&city_id)
+        .ok_or(CommandError::NoSuchCity(city_id))?;
+    let group = city
+        .groups
+        .get(&group_id)
+        .ok_or(CommandError::NoSuchGroup(group_id))?;
     let available = city.unmanaged(group_id);
     if count > available {
-        return Err(CommandError::NotEnoughUnmanaged { group: group_id, available, requested: count });
+        return Err(CommandError::NotEnoughUnmanaged {
+            group: group_id,
+            available,
+            requested: count,
+        });
     }
 
     // 被选中的人习得「士」：只有他们改变技能槽，人群里的其他人不受影响
@@ -816,7 +1267,10 @@ fn appoint_shi(
 
     let ids: Vec<Id> = (0..count).map(|_| state.alloc_id()).collect();
     let city = state.cities.get_mut(&city_id).expect("city checked above");
-    city.groups.get_mut(&group_id).expect("group checked above").size -= count;
+    city.groups
+        .get_mut(&group_id)
+        .expect("group checked above")
+        .size -= count;
     for id in &ids {
         city.officials.insert(
             *id,
@@ -841,7 +1295,10 @@ fn start_assignment(
     task: &Task,
     workers: &BTreeMap<Id, u32>,
 ) -> Result<Vec<Id>, CommandError> {
-    let city = state.cities.get(&city_id).ok_or(CommandError::NoSuchCity(city_id))?;
+    let city = state
+        .cities
+        .get(&city_id)
+        .ok_or(CommandError::NoSuchCity(city_id))?;
     if !city.officials.contains_key(&shi) {
         return Err(CommandError::NoSuchOfficial(shi));
     }
@@ -859,7 +1316,10 @@ fn start_assignment(
     let requested: u32 = workers.values().sum();
     let capacity = city.official_capacity(shi, config);
     if requested > capacity {
-        return Err(CommandError::OverCapacity { capacity, requested });
+        return Err(CommandError::OverCapacity {
+            capacity,
+            requested,
+        });
     }
 
     let check_labor = |skill: Option<&str>| -> Result<(), CommandError> {
@@ -867,11 +1327,18 @@ fn start_assignment(
             if let Some(skill) = skill
                 && !city.groups[group].has_skill(skill)
             {
-                return Err(CommandError::MissingSkill { group: *group, skill: skill.to_string() });
+                return Err(CommandError::MissingSkill {
+                    group: *group,
+                    skill: skill.to_string(),
+                });
             }
             let available = city.unmanaged(*group);
             if *count > available {
-                return Err(CommandError::NotEnoughUnmanaged { group: *group, available, requested: *count });
+                return Err(CommandError::NotEnoughUnmanaged {
+                    group: *group,
+                    available,
+                    requested: *count,
+                });
             }
         }
         Ok(())
@@ -880,7 +1347,10 @@ fn start_assignment(
     let mut materials = None;
     match task {
         Task::Produce { recipe, mode } => {
-            let def = config.recipes.get(recipe).ok_or_else(|| CommandError::NoSuchRecipe(recipe.clone()))?;
+            let def = config
+                .recipes
+                .get(recipe)
+                .ok_or_else(|| CommandError::NoSuchRecipe(recipe.clone()))?;
             if let Some(resource) = &def.resource
                 && !city.has_terrain(resource)
             {
@@ -890,13 +1360,19 @@ fn start_assignment(
             if let Some(facility) = &def.facility
                 && !city.has_building(facility, *mode)
             {
-                return Err(CommandError::MissingFacility { facility: config.buildings[facility].name.clone(), mode: *mode });
+                return Err(CommandError::MissingFacility {
+                    facility: config.buildings[facility].name.clone(),
+                    mode: *mode,
+                });
             }
             check_labor(Some(&def.skill))?;
             if let Some(min) = def.min_specialization {
                 for group in workers.keys() {
                     if config.specialization(city.groups[group].skills.len()) + 1e-9 < min {
-                        return Err(CommandError::SpecializationTooLow { group: *group, recipe: def.name.clone() });
+                        return Err(CommandError::SpecializationTooLow {
+                            group: *group,
+                            recipe: def.name.clone(),
+                        });
                     }
                 }
             }
@@ -904,7 +1380,11 @@ fn start_assignment(
             if let Some(pool) = config.pool_of(recipe) {
                 let available = city.free_jobs(config, &pool, *mode);
                 if requested > available {
-                    return Err(CommandError::NoJobs { pool: config.pool_name(&pool).to_string(), available, requested });
+                    return Err(CommandError::NoJobs {
+                        pool: config.pool_name(&pool).to_string(),
+                        available,
+                        requested,
+                    });
                 }
             }
         }
@@ -913,7 +1393,10 @@ fn start_assignment(
                 .improvements
                 .get(improvement)
                 .ok_or_else(|| CommandError::NoSuchImprovement(improvement.clone()))?;
-            let target = city.tiles.get(tile).ok_or(CommandError::NoSuchTile(*tile))?;
+            let target = city
+                .tiles
+                .get(tile)
+                .ok_or(CommandError::NoSuchTile(*tile))?;
             if !def.terrains.contains(&target.terrain) {
                 return Err(CommandError::CannotImprove(def.name.clone()));
             }
@@ -934,7 +1417,10 @@ fn start_assignment(
                 .buildings
                 .get(building)
                 .ok_or_else(|| CommandError::NoSuchBuilding(building.clone()))?;
-            let target = city.tiles.get(tile).ok_or(CommandError::NoSuchTile(*tile))?;
+            let target = city
+                .tiles
+                .get(tile)
+                .ok_or(CommandError::NoSuchTile(*tile))?;
             if !def.terrains.is_empty() && !def.terrains.contains(&target.terrain) {
                 return Err(CommandError::WrongTerrain(def.name.clone()));
             }
@@ -950,26 +1436,61 @@ fn start_assignment(
         Task::Reclaim { at, terrain } => {
             let cell = state.map.get(*at).ok_or(CommandError::NoSuchCell(*at))?;
             if let Some(owner) = state.city_at(*at) {
-                return Err(CommandError::CellTaken { at: *at, city: state.cities[&owner].name.clone() });
+                return Err(CommandError::CellTaken {
+                    at: *at,
+                    city: state.cities[&owner].name.clone(),
+                });
             }
             if !city.borders(*at) {
                 return Err(CommandError::NotBordering(*at));
             }
             let def = &config.terrains[&cell.terrain];
             if &cell.terrain != terrain {
-                return Err(CommandError::TerrainMismatch { at: *at, actual: def.name.clone() });
+                return Err(CommandError::TerrainMismatch {
+                    at: *at,
+                    actual: def.name.clone(),
+                });
             }
-            let skill = def.reclaim_skill.as_deref().ok_or_else(|| CommandError::CannotReclaim(def.name.clone()))?;
-            if city.assignments.values().any(|a| matches!(&a.task, Task::Reclaim { at: other, .. } if other == at)) {
+            let skill = def
+                .reclaim_skill
+                .as_deref()
+                .ok_or_else(|| CommandError::CannotReclaim(def.name.clone()))?;
+            if city
+                .assignments
+                .values()
+                .any(|a| matches!(&a.task, Task::Reclaim { at: other, .. } if other == at))
+            {
                 return Err(CommandError::AlreadyReclaiming(*at));
             }
             check_labor(Some(skill))?;
         }
+        Task::RepairWall => {
+            if city.wall_hp(config).is_none() {
+                return Err(CommandError::NoWall);
+            }
+            if city.wall_damage <= 0.0 {
+                return Err(CommandError::WallIntact);
+            }
+            if city
+                .assignments
+                .values()
+                .any(|a| a.task == Task::RepairWall)
+            {
+                return Err(CommandError::AlreadyRepairing);
+            }
+            check_labor(Some(&config.siege.repair_skill))?;
+        }
         Task::CollectTax => {
             for (group, count) in workers {
-                let available = city.groups[group].size.saturating_sub(city.tax_covered(*group));
+                let available = city.groups[group]
+                    .size
+                    .saturating_sub(city.tax_covered(*group));
                 if *count > available {
-                    return Err(CommandError::NotEnoughUntaxed { group: *group, available, requested: *count });
+                    return Err(CommandError::NotEnoughUntaxed {
+                        group: *group,
+                        available,
+                        requested: *count,
+                    });
                 }
             }
         }
@@ -977,7 +1498,12 @@ fn start_assignment(
             if !workers.is_empty() {
                 return Err(CommandError::SacrificeTakesNoWorkers);
             }
-            let vessels: f64 = config.sacrifice.vessels.keys().map(|g| city.treasury.get(g).floor()).sum();
+            let vessels: f64 = config
+                .sacrifice
+                .vessels
+                .keys()
+                .map(|g| city.treasury.get(g).floor())
+                .sum();
             if vessels < 1.0 {
                 return Err(CommandError::NoVessel);
             }
@@ -993,7 +1519,13 @@ fn start_assignment(
     }
     city.assignments.insert(
         id,
-        Assignment { id, shi, task: task.clone(), workers: workers.clone(), progress: 0.0 },
+        Assignment {
+            id,
+            shi,
+            task: task.clone(),
+            workers: workers.clone(),
+            progress: 0.0,
+        },
     );
     Ok(vec![id])
 }

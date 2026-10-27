@@ -2,10 +2,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::army::Army;
 use crate::config::{Config, Pool};
 use crate::deal::Deal;
 use crate::inventory::Inventory;
 use crate::map::{Hex, Map};
+use crate::war::{Party, Truce, War};
 
 /// 所有实体共用一个递增的 id 空间。
 pub type Id = u32;
@@ -25,6 +27,20 @@ pub struct GameState {
     /// 还没答复的赠与、索取、交易
     #[serde(default)]
     pub deals: BTreeMap<Id, Deal>,
+    #[serde(default)]
+    pub armies: BTreeMap<Id, Army>,
+    /// 正在打的仗
+    #[serde(default)]
+    pub wars: BTreeMap<Id, War>,
+    /// 讲和之后的停战期
+    #[serde(default)]
+    pub truces: Vec<Truce>,
+    /// 回合中下令时发生的事（交战、攻城、劫掠……），回合结束时并进报告
+    #[serde(default)]
+    pub pending_events: Vec<crate::event::Event>,
+    /// 每个人记得的别人的军队和城（战争迷雾）
+    #[serde(default)]
+    pub intel: BTreeMap<Id, crate::vision::Intel>,
 }
 
 /// 国家：独立存在，不随某个人物存在或消失。国籍指向国家，城市隶属于所有者国籍所在的国家。
@@ -52,7 +68,9 @@ impl GameState {
     /// 这一格属于哪座城，野地返回 None
     /// 城市隶属的国家：所有者的国籍
     pub fn country_of(&self, city: &City) -> Option<Id> {
-        city.owner.and_then(|o| self.characters.get(&o)).and_then(|c| c.nationality)
+        city.owner
+            .and_then(|o| self.characters.get(&o))
+            .and_then(|c| c.nationality)
     }
 
     /// 国君送走、封出 `losing` 这些城之后，自己手里还剩不剩城。不是国君时总是 true。
@@ -60,7 +78,10 @@ impl GameState {
     pub fn ruler_keeps_a_city(&self, who: Id, losing: &[Id]) -> bool {
         losing.is_empty()
             || !self.countries.values().any(|c| c.ruler == who)
-            || self.cities.values().any(|c| c.owner == Some(who) && !losing.contains(&c.id))
+            || self
+                .cities
+                .values()
+                .any(|c| c.owner == Some(who) && !losing.contains(&c.id))
     }
 
     /// 邻城增益：同一个所有者的其他城，治所相距不超过 `neighbor.range` 格的，每座给这座城的产出加一成，有上限。
@@ -70,15 +91,22 @@ impl GameState {
         let n = self
             .cities
             .values()
-            .filter(|c| c.id != city.id && c.owner == Some(owner) && c.seat.distance(city.seat) <= config.neighbor.range)
+            .filter(|c| {
+                c.id != city.id
+                    && c.owner == Some(owner)
+                    && c.seat.distance(city.seat) <= config.neighbor.range
+            })
             .count();
         1.0 + (n as f64 * config.neighbor.bonus).min(config.neighbor.max)
     }
 
     /// 人物能待在这座城：城是他自己的；自己一座城都没有时，只能待在他管理的城。
     pub fn can_stay(&self, who: Id, city: Id) -> bool {
-        let Some(c) = self.cities.get(&city) else { return false };
-        c.owner == Some(who) || (c.manager == Some(who) && !self.cities.values().any(|c| c.owner == Some(who)))
+        let Some(c) = self.cities.get(&city) else {
+            return false;
+        };
+        c.owner == Some(who)
+            || (c.manager == Some(who) && !self.cities.values().any(|c| c.owner == Some(who)))
     }
 
     /// 所在的城不再能待（城送了人、封了出去、被灭了）或者还没有所在的城时，回到默认的地方：
@@ -111,17 +139,58 @@ impl GameState {
         if merchant {
             return true;
         }
-        let Some(city) = self.city_at(pos).and_then(|id| self.cities.get(&id)) else { return true };
-        if city.owner == Some(who) || city.passage.get(&who).is_some_and(|until| self.turn < *until) {
+        let Some(city) = self.city_at(pos).and_then(|id| self.cities.get(&id)) else {
+            return true;
+        };
+        // 占领者用这座城，自己的军队当然能走
+        let occupier = city.status == CityStatus::Occupied && city.occupier == Some(who);
+        if city.owner == Some(who)
+            || occupier
+            || city
+                .passage
+                .get(&who)
+                .is_some_and(|until| self.turn < *until)
+        {
             return true;
         }
-        let Some(country) = self.country_of(city).and_then(|id| self.countries.get(&id)) else { return false };
+        let Some(country) = self.country_of(city).and_then(|id| self.countries.get(&id)) else {
+            return false;
+        };
         country.ruler == who
-            || (country.national_war && self.characters.get(&who).and_then(|c| c.nationality) == Some(country.id))
+            || (country.national_war
+                && self.characters.get(&who).and_then(|c| c.nationality) == Some(country.id))
+    }
+
+    /// 让两人直接开战或停战（人与人的战争），不经过宣战的规矩。测试和剧本用。
+    pub fn set_war(&mut self, a: Id, b: Id, war: bool) {
+        let pair = [Party::Person { id: a }, Party::Person { id: b }];
+        if war {
+            if !self.at_war(a, b) {
+                let id = self.alloc_id();
+                self.wars.insert(
+                    id,
+                    War {
+                        id,
+                        attacker: pair[0],
+                        defender: pair[1],
+                        started: self.turn,
+                        justified: true,
+                        halted: false,
+                        tasks: BTreeMap::new(),
+                        peace: None,
+                    },
+                );
+            }
+        } else {
+            self.wars.retain(|_, w| !w.opposes_people(a, b));
+        }
     }
 
     pub fn city_at(&self, pos: Hex) -> Option<Id> {
-        self.cities.values().find(|c| c.tile_at(pos).is_some()).map(|c| c.id)
+        self.cities
+            .values()
+            .find(|c| c.tile_at(pos).is_some())
+            .map(|c| c.id)
     }
 
     pub fn season_index(&self, config: &Config) -> usize {
@@ -172,6 +241,9 @@ pub struct Character {
     /// 所在的城市，同一时间只能在一座城里。默认在自己管理的城；平时只能搬去自己拥有的城
     #[serde(default)]
     pub location: Option<Id>,
+    /// 最近一次违抗国君（不执行国战任务、国君制止后还动手）的回合
+    #[serde(default)]
+    pub defied_turn: Option<u32>,
 }
 
 impl Character {
@@ -188,11 +260,15 @@ impl Character {
             nationality: None,
             usurped_turn: None,
             location: None,
+            defied_turn: None,
         }
     }
 
     pub fn trust_in(&self, other: Id, config: &Config) -> f64 {
-        self.trust.get(&other).copied().unwrap_or(config.quota.initial_trust)
+        self.trust
+            .get(&other)
+            .copied()
+            .unwrap_or(config.quota.initial_trust)
     }
 }
 
@@ -260,6 +336,20 @@ pub struct City {
     /// 通行权由所有者在赠与、交易中给出，有期限；没有的人，哪怕是同一国的，军队也过不去
     #[serde(default)]
     pub passage: BTreeMap<Id, u32>,
+    /// 城墙、城中心被打掉的防御值。城墙不会自己回血，要派工人修
+    #[serde(default)]
+    pub wall_damage: f64,
+    #[serde(default)]
+    pub center_damage: f64,
+    /// 城墙这回合挨了打，修不了
+    #[serde(default)]
+    pub wall_attacked: bool,
+    /// 这回合已经被劫掠过，每座城每回合只能劫掠一次
+    #[serde(default)]
+    pub plundered: bool,
+    /// 攻占这座城的人。他用这座城，但没有所有权；城由他选来接管的人管理
+    #[serde(default)]
+    pub occupier: Option<Id>,
 }
 
 /// 封君手动指定的纳贡：每年要纳的物资。封臣随时纳贡，进封君的私库，年末结算后清零重新累计。
@@ -282,6 +372,39 @@ pub struct Quota {
 }
 
 impl City {
+    /// 守城的一方：城被攻占时是占领者，否则是所有者。
+    pub fn holder(&self) -> Option<Id> {
+        match self.status {
+            CityStatus::Occupied => self.occupier,
+            _ => self.owner,
+        }
+    }
+
+    /// 城里的当事人：所有者、管理者、占领者，城里的事他们都看得到。
+    pub fn insiders(&self) -> Vec<Id> {
+        let mut ids: Vec<Id> = [self.owner, self.manager, self.occupier]
+            .into_iter()
+            .flatten()
+            .collect();
+        ids.dedup();
+        ids
+    }
+
+    /// 城墙还剩的防御值；没有城墙（包括没建成）时为 None，打破了为 Some(0)。
+    pub fn wall_hp(&self, config: &Config) -> Option<f64> {
+        let has_wall = self
+            .tiles
+            .values()
+            .flat_map(|t| &t.buildings)
+            .any(|b| b.kind == config.siege.wall_building);
+        has_wall.then(|| (config.siege.wall_hp - self.wall_damage).max(0.0))
+    }
+
+    /// 城墙立着：有城墙，而且没被打破。
+    pub fn wall_standing(&self, config: &Config) -> bool {
+        self.wall_hp(config).is_some_and(|hp| hp > 0.0)
+    }
+
     /// 所有者、管理者、城市状态带来的产能倍率。
     pub fn efficiency(&self, config: &Config) -> f64 {
         let mut mult = 1.0;
@@ -305,18 +428,25 @@ impl City {
 
     /// 城中有没有某种经营方式的某种建筑。
     pub fn has_building(&self, kind: &str, mode: Mode) -> bool {
-        self.tiles.values().flat_map(|t| &t.buildings).any(|b| b.kind == kind && b.mode == mode)
+        self.tiles
+            .values()
+            .flat_map(|t| &t.buildings)
+            .any(|b| b.kind == kind && b.mode == mode)
     }
 
     /// 一块地上还能再建几座建筑，扣除正在营建的。
     pub fn free_building_slots(&self, tile: Id, config: &Config) -> u32 {
-        let Some(t) = self.tiles.get(&tile) else { return 0 };
+        let Some(t) = self.tiles.get(&tile) else {
+            return 0;
+        };
         let pending = self
             .assignments
             .values()
             .filter(|a| matches!(&a.task, Task::Construct { tile: target, .. } if *target == tile))
             .count() as u32;
-        config.terrains[&t.terrain].building_slots.saturating_sub(t.buildings.len() as u32 + pending)
+        config.terrains[&t.terrain]
+            .building_slots
+            .saturating_sub(t.buildings.len() as u32 + pending)
     }
 
     pub fn tile_at(&self, pos: Hex) -> Option<&Tile> {
@@ -334,8 +464,16 @@ impl City {
 
     /// 全城能居住的人口：地块加建筑。
     pub fn housing(&self, config: &Config) -> u32 {
-        let tiles: u32 = self.tiles.values().map(|t| config.terrains[&t.terrain].housing).sum();
-        let buildings: u32 = self.buildings().iter().map(|(id, n)| config.buildings[id].housing * n).sum();
+        let tiles: u32 = self
+            .tiles
+            .values()
+            .map(|t| config.terrains[&t.terrain].housing)
+            .sum();
+        let buildings: u32 = self
+            .buildings()
+            .iter()
+            .map(|(id, n)| config.buildings[id].housing * n)
+            .sum();
         tiles + buildings
     }
 
@@ -347,20 +485,36 @@ impl City {
                 .tiles
                 .values()
                 .filter(|t| &t.terrain == terrain)
-                .map(|t| JobSlot { count: config.terrains[terrain].jobs, mult: t.yield_mult(config), mode: None })
+                .map(|t| JobSlot {
+                    count: config.terrains[terrain].jobs,
+                    mult: t.yield_mult(config),
+                    mode: None,
+                })
                 .collect(),
             Pool::Recipe(recipe) => {
                 let base = config.recipes[recipe].base_jobs.unwrap_or(0);
-                let mut slots = vec![JobSlot { count: base, mult: 1.0, mode: None }];
+                let mut slots = vec![JobSlot {
+                    count: base,
+                    mult: 1.0,
+                    mode: None,
+                }];
                 for b in self.tiles.values().flat_map(|t| &t.buildings) {
                     if let Some(count) = config.buildings[&b.kind].jobs.get(recipe) {
-                        slots.push(JobSlot { count: *count, mult: 1.0, mode: Some(b.mode) });
+                        slots.push(JobSlot {
+                            count: *count,
+                            mult: 1.0,
+                            mode: Some(b.mode),
+                        });
                     }
                 }
                 slots
             }
         };
-        slots.sort_by(|a: &JobSlot, b| b.mult.total_cmp(&a.mult).then(b.mode.is_some().cmp(&a.mode.is_some())));
+        slots.sort_by(|a: &JobSlot, b| {
+            b.mult
+                .total_cmp(&a.mult)
+                .then(b.mode.is_some().cmp(&a.mode.is_some()))
+        });
         slots
     }
 
@@ -373,12 +527,16 @@ impl City {
     /// 不够再占两种都能用的位置。
     pub fn free_jobs(&self, config: &Config, pool: &Pool, mode: Mode) -> u32 {
         let slots = self.job_slots(config, pool);
-        let count = |m: Option<Mode>| -> u32 { slots.iter().filter(|s| s.mode == m).map(|s| s.count).sum() };
+        let count = |m: Option<Mode>| -> u32 {
+            slots.iter().filter(|s| s.mode == m).map(|s| s.count).sum()
+        };
         let managed = |m: Mode| -> u32 {
             self.assignments
                 .values()
                 .filter(|a| match &a.task {
-                    Task::Produce { recipe, mode } => *mode == m && config.pool_of(recipe).as_ref() == Some(pool),
+                    Task::Produce { recipe, mode } => {
+                        *mode == m && config.pool_of(recipe).as_ref() == Some(pool)
+                    }
                     _ => false,
                 })
                 .map(Assignment::worker_count)
@@ -394,7 +552,9 @@ impl City {
 
     /// 某名士人在本城能管理的人口上限，包含建筑的加成。
     pub fn official_capacity(&self, official: Id, config: &Config) -> u32 {
-        let Some(official) = self.officials.get(&official) else { return 0 };
+        let Some(official) = self.officials.get(&official) else {
+            return 0;
+        };
         let bonus: f64 = self
             .buildings()
             .iter()
@@ -414,14 +574,25 @@ impl City {
 
     /// 某群人中正在学技能的人数。
     pub fn learning_in(&self, group: Id) -> u32 {
-        self.learning.values().filter(|l| l.group == group).map(|l| l.count).sum()
+        self.learning
+            .values()
+            .filter(|l| l.group == group)
+            .map(|l| l.count)
+            .sum()
     }
 
     /// 从一群人中分出 `count` 人，技能槽改为 `skills`，返回他们归入的人群：
     /// 城中已有技能槽和文化图腾都相同的人群就并入，否则成为一群新的人。
     /// 优先分出未被管理的人；正在做工事的人被分出去后，带着原来的工事继续做，
     /// 只有新技能槽做不了这项工事时（比如丢弃了需要的技能）才撤下来。
-    pub fn move_people(&mut self, config: &Config, source_id: Id, count: u32, skills: &[String], next_id: &mut Id) -> Id {
+    pub fn move_people(
+        &mut self,
+        config: &Config,
+        source_id: Id,
+        count: u32,
+        skills: &[String],
+        next_id: &mut Id,
+    ) -> Id {
         let target_id = self.split_group(config, source_id, count, skills, next_id);
         if target_id == source_id {
             // 整群人直接改了技能槽：做不了的工事撤下来
@@ -461,7 +632,10 @@ impl City {
             .filter(|a| !matches!(a.task, Task::Sacrifice) && a.worker_count() == 0)
             .map(|a| a.id)
             .collect();
-        empty.iter().filter_map(|id| self.assignments.remove(id)).collect()
+        empty
+            .iter()
+            .filter_map(|id| self.assignments.remove(id))
+            .collect()
     }
 
     /// 人群分出人后，原人群的工事投入超出人数时，把超出的部分转给分出去的人群。
@@ -483,7 +657,9 @@ impl City {
                 if a.task.uses_labor() != labor {
                     continue;
                 }
-                let Some(count) = a.workers.get_mut(&source_id) else { continue };
+                let Some(count) = a.workers.get_mut(&source_id) else {
+                    continue;
+                };
                 let moved = (*count).min(total - size);
                 *count -= moved;
                 total -= moved;
@@ -497,17 +673,35 @@ impl City {
         }
     }
 
-    fn split_group(&mut self, config: &Config, source_id: Id, count: u32, skills: &[String], next_id: &mut Id) -> Id {
-        let source = self.groups.get_mut(&source_id).expect("source group exists");
+    fn split_group(
+        &mut self,
+        config: &Config,
+        source_id: Id,
+        count: u32,
+        skills: &[String],
+        next_id: &mut Id,
+    ) -> Id {
+        let source = self
+            .groups
+            .get_mut(&source_id)
+            .expect("source group exists");
         let count = count.min(source.size);
-        let (totem, culture, happiness, loyalty, hostility) =
-            (source.totem.clone(), source.culture, source.happiness, source.loyalty, source.hostility);
+        let (totem, culture, happiness, loyalty, hostility) = (
+            source.totem.clone(),
+            source.culture,
+            source.happiness,
+            source.loyalty,
+            source.hostility,
+        );
         let existing = self
             .groups
             .values()
             .find(|g| g.id != source_id && g.skills == skills && g.totem == totem)
             .map(|g| g.id);
-        let source = self.groups.get_mut(&source_id).expect("source group exists");
+        let source = self
+            .groups
+            .get_mut(&source_id)
+            .expect("source group exists");
         // 整群人一起改，又没有可以并入的人群：直接改这群人的技能槽
         if existing.is_none() && count == source.size {
             source.skills = skills.to_vec();
@@ -517,10 +711,12 @@ impl City {
         let name = format!("{}·{}", source.name, config.skill_name(&skills[0]));
         if let Some(target) = existing.and_then(|id| self.groups.get_mut(&id)) {
             let total = (target.size + count).max(1) as f64;
-            target.happiness = (target.happiness * target.size as f64 + happiness * count as f64) / total;
+            target.happiness =
+                (target.happiness * target.size as f64 + happiness * count as f64) / total;
             target.culture = (target.culture * target.size as f64 + culture * count as f64) / total;
             target.loyalty = (target.loyalty * target.size as f64 + loyalty * count as f64) / total;
-            target.hostility = (target.hostility * target.size as f64 + hostility * count as f64) / total;
+            target.hostility =
+                (target.hostility * target.size as f64 + hostility * count as f64) / total;
             target.size += count;
             return target.id;
         }
@@ -603,7 +799,13 @@ pub struct Building {
 
 impl Tile {
     pub fn new(id: Id, pos: Hex, terrain: impl Into<String>) -> Self {
-        Tile { id, pos, terrain: terrain.into(), improvements: BTreeMap::new(), buildings: Vec::new() }
+        Tile {
+            id,
+            pos,
+            terrain: terrain.into(),
+            improvements: BTreeMap::new(),
+            buildings: Vec::new(),
+        }
     }
 
     pub fn yield_mult(&self, config: &Config) -> f64 {
@@ -690,17 +892,32 @@ pub enum Mode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Task {
-    Produce { recipe: String, mode: Mode },
+    Produce {
+        recipe: String,
+        mode: Mode,
+    },
     /// 在一块地上营建。`mode` 是建成后这座建筑的经营方式；营建本身一律由府库出材料、视为官营
-    Construct { building: String, tile: Id, mode: Mode },
+    Construct {
+        building: String,
+        tile: Id,
+        mode: Mode,
+    },
     /// 把和城市相邻的一格野地开垦进来。`terrain` 必须和地图上这一格的地形相同，决定需要什么技能；
     /// 期间参与的人一直被占用
-    Reclaim { at: Hex, terrain: String },
+    Reclaim {
+        at: Hex,
+        terrain: String,
+    },
     /// 改良一块地，比如水利。和营建一样视为官营
-    Improve { tile: Id, improvement: String },
+    Improve {
+        tile: Id,
+        improvement: String,
+    },
     CollectTax,
     /// 祭祀只持续一个回合
     Sacrifice,
+    /// 修城墙，修满为止。城墙这回合挨了打就修不了
+    RepairWall,
 }
 
 impl Task {
@@ -709,7 +926,10 @@ impl Task {
         let skill = match self {
             Task::Produce { recipe, .. } => {
                 let def = &config.recipes[recipe];
-                if def.min_specialization.is_some_and(|min| config.specialization(group.skills.len()) + 1e-9 < min) {
+                if def
+                    .min_specialization
+                    .is_some_and(|min| config.specialization(group.skills.len()) + 1e-9 < min)
+                {
                     return false;
                 }
                 Some(&def.skill)
@@ -717,6 +937,7 @@ impl Task {
             Task::Construct { building, .. } => config.buildings[building].skill.as_ref(),
             Task::Improve { improvement, .. } => config.improvements[improvement].skill.as_ref(),
             Task::Reclaim { terrain, .. } => config.terrains[terrain].reclaim_skill.as_ref(),
+            Task::RepairWall => Some(&config.siege.repair_skill),
             Task::CollectTax | Task::Sacrifice => None,
         };
         skill.is_none_or(|s| group.has_skill(s))

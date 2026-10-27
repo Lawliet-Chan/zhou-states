@@ -40,7 +40,10 @@ impl Inventory {
     }
 
     pub fn contains_all(&self, other: &Inventory) -> bool {
-        other.0.iter().all(|(good, amount)| self.get(good) + EPS >= *amount)
+        other
+            .0
+            .iter()
+            .all(|(good, amount)| self.get(good) + EPS >= *amount)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &f64)> {

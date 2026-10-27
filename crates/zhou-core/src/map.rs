@@ -2,9 +2,12 @@
 //!
 //! 坐标用轴向坐标 (q, r)。剧本里手画地图时按行列书写（奇数行向右缩进半格），加载时换算。
 
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::config::Config;
 
 /// 地图上的一格，轴向坐标。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -23,7 +26,10 @@ impl Hex {
 
     /// 由行列换算：奇数行向右缩进半格。
     pub fn from_offset(col: i32, row: i32) -> Self {
-        Hex { q: col - (row - (row & 1)) / 2, r: row }
+        Hex {
+            q: col - (row - (row & 1)) / 2,
+            r: row,
+        }
     }
 
     /// 换算回行列。
@@ -32,7 +38,9 @@ impl Hex {
     }
 
     pub fn neighbors(self) -> impl Iterator<Item = Hex> {
-        DIRECTIONS.iter().map(move |(dq, dr)| Hex::new(self.q + dq, self.r + dr))
+        DIRECTIONS
+            .iter()
+            .map(move |(dq, dr)| Hex::new(self.q + dq, self.r + dr))
     }
 
     pub fn is_adjacent(self, other: Hex) -> bool {
@@ -95,7 +103,67 @@ impl Map {
     }
 
     pub fn insert(&mut self, pos: Hex, terrain: impl Into<String>) {
-        self.cells.insert(pos, Cell { pos, terrain: terrain.into() });
+        self.cells.insert(
+            pos,
+            Cell {
+                pos,
+                terrain: terrain.into(),
+            },
+        );
+    }
+
+    /// 从 `from` 到 `to` 耗时最少的路线，不含起点。`cost` 给出走进一格的耗时，None 表示走不进去。
+    /// 耗时相同的路线按坐标取第一条，保证结果可复现。走不到时返回 None。
+    pub fn shortest_path(
+        &self,
+        from: Hex,
+        to: Hex,
+        cost: impl Fn(Hex) -> Option<u32>,
+    ) -> Option<Vec<Hex>> {
+        if from == to {
+            return Some(Vec::new());
+        }
+        let mut best: BTreeMap<Hex, (u32, Hex)> = BTreeMap::new();
+        let mut queue = BinaryHeap::new();
+        queue.push(Reverse((0, from)));
+        while let Some(Reverse((spent, pos))) = queue.pop() {
+            if pos == to {
+                break;
+            }
+            if best.get(&pos).is_some_and(|(c, _)| *c < spent) {
+                continue;
+            }
+            for next in pos.neighbors() {
+                if next == from || self.get(next).is_none() {
+                    continue;
+                }
+                let Some(step) = cost(next) else { continue };
+                let total = spent + step;
+                if best.get(&next).is_none_or(|(c, _)| total < *c) {
+                    best.insert(next, (total, pos));
+                    queue.push(Reverse((total, next)));
+                }
+            }
+        }
+        best.get(&to)?;
+        let mut path = vec![to];
+        let mut pos = to;
+        while let Some((_, prev)) = best.get(&pos) {
+            if *prev == from {
+                break;
+            }
+            path.push(*prev);
+            pos = *prev;
+        }
+        path.reverse();
+        Some(path)
+    }
+
+    /// 军队走进这一格要花的行军力。没有这一格，或者地形过不去（高山、大河），返回 None。
+    pub fn move_cost(&self, pos: Hex, config: &Config) -> Option<u32> {
+        self.get(pos)
+            .and_then(|cell| config.terrains.get(&cell.terrain))
+            .and_then(|t| t.move_cost)
     }
 }
 
@@ -109,7 +177,9 @@ impl Serialize for Map {
 impl<'de> Deserialize<'de> for Map {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let cells = Vec::<Cell>::deserialize(deserializer)?;
-        Ok(Map { cells: cells.into_iter().map(|c| (c.pos, c)).collect() })
+        Ok(Map {
+            cells: cells.into_iter().map(|c| (c.pos, c)).collect(),
+        })
     }
 }
 

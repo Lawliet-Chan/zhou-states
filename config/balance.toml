@@ -212,28 +212,40 @@ turns = 1
 # ---------------------------------------------------------------- 物品
 # value：价值，用于折算民间财富的多少，不填为 1
 # fine：这种物品的精品，生产时按专精度分出一部分精品
+# category：类别，见 [categories]。劫掠时按类别挑
+
+[categories]
+food = "粮食"
+material = "材料"
+luxury = "奢侈品"
+ritual = "礼器"
+military = "军备"
+money = "钱币"
 
 [goods]
-grain = { name = "粮", value = 1.0 }
-fish = { name = "鱼", value = 1.0 }
-meat = { name = "肉", value = 1.5 }
-salt = { name = "盐", value = 2.0 }
-hide = { name = "皮革", value = 2.0 }
-horse = { name = "马", value = 20.0 }
-bronze = { name = "青铜", value = 5.0 }
-weapon = { name = "兵器", value = 8.0, fine = "weapon_fine" }
-armor = { name = "甲", value = 8.0, fine = "armor_fine" }
-ding = { name = "鼎", value = 100.0, fine = "ding_fine" }
-gui = { name = "簋", value = 50.0, fine = "gui_fine" }
-jade = { name = "玉器", value = 30.0, fine = "jade_fine" }
-cloth = { name = "布", value = 3.0, fine = "cloth_fine" }
-coin = { name = "钱币", value = 1.0 }
-weapon_fine = { name = "精兵", value = 24.0 }
-armor_fine = { name = "精甲", value = 24.0 }
-ding_fine = { name = "精鼎", value = 300.0 }
-gui_fine = { name = "精簋", value = 150.0 }
-jade_fine = { name = "精玉", value = 90.0 }
-cloth_fine = { name = "细布", value = 9.0 }
+grain = { name = "粮", category = "food", value = 1.0 }
+fish = { name = "鱼", category = "food", value = 1.0 }
+meat = { name = "肉", category = "food", value = 1.5 }
+salt = { name = "盐", category = "food", value = 2.0 }
+hide = { name = "皮革", category = "material", value = 2.0 }
+horse = { name = "马", category = "military", value = 20.0 }
+bronze = { name = "青铜", category = "material", value = 5.0 }
+weapon = { name = "兵器", category = "military", value = 8.0, fine = "weapon_fine" }
+armor = { name = "甲", category = "military", value = 8.0, fine = "armor_fine" }
+ding = { name = "鼎", category = "ritual", value = 100.0, fine = "ding_fine" }
+gui = { name = "簋", category = "ritual", value = 50.0, fine = "gui_fine" }
+jade = { name = "玉器", category = "luxury", value = 30.0, fine = "jade_fine" }
+cloth = { name = "布", category = "luxury", value = 3.0, fine = "cloth_fine" }
+coin = { name = "钱币", category = "money", value = 1.0 }
+weapon_fine = { name = "精兵", category = "military", value = 24.0 }
+armor_fine = { name = "精甲", category = "military", value = 24.0 }
+ding_fine = { name = "精鼎", category = "ritual", value = 300.0 }
+gui_fine = { name = "精簋", category = "ritual", value = 150.0 }
+jade_fine = { name = "精玉", category = "luxury", value = 90.0 }
+cloth_fine = { name = "细布", category = "luxury", value = 9.0 }
+chariot = { name = "战车", category = "military", value = 60.0 }
+bow = { name = "弓矢", category = "military", value = 6.0 }
+siege_engine = { name = "攻城机", category = "military", value = 80.0 }
 
 # ---------------------------------------------------------------- 行业
 # default_recipe：未被管理的人口按技能槽第一项技能自主民营时使用的配方
@@ -263,6 +275,9 @@ martial = { name = "军武" }
 # building_slots：每块地能建几座建筑，官营和民营都算；建筑不影响这块地的居住和劳作
 # reclaim_skill / reclaim_labor：把和城相邻的一格这种野地开垦进城，需要的技能和人力（人 × 回合）
 #   开垦期间参与的人一直被占用，人力满后当回合到手；不填 reclaim_skill 的地开垦不了
+# move_cost：军队走进这种地形的一格要花的行军力。不写 move_cost 的地形过不去（高山、大河），
+#   也不能住人、劳作、开垦，不能属于城市
+# defense_bonus：守在这种地形上的军队防御增加的比例
 
 [terrains.farmland]
 name = "耕地"
@@ -272,6 +287,7 @@ jobs = 60
 building_slots = 3
 reclaim_skill = "farming"
 reclaim_labor = 600.0
+move_cost = 1
 
 [terrains.water]
 name = "水泽"
@@ -281,6 +297,7 @@ jobs = 30
 building_slots = 3
 reclaim_skill = "fishing"
 reclaim_labor = 450.0
+move_cost = 2
 
 [terrains.forest]
 name = "山林"
@@ -290,6 +307,8 @@ jobs = 30
 building_slots = 3
 reclaim_skill = "hunting"
 reclaim_labor = 450.0
+move_cost = 2
+defense_bonus = 0.25
 
 [terrains.salt_pond]
 name = "盐池"
@@ -299,6 +318,7 @@ jobs = 30
 building_slots = 3
 reclaim_skill = "salt_making"
 reclaim_labor = 600.0
+move_cost = 1
 
 [terrains.copper_mine]
 name = "铜矿"
@@ -308,6 +328,8 @@ jobs = 30
 building_slots = 3
 reclaim_skill = "smelting"
 reclaim_labor = 900.0
+move_cost = 2
+defense_bonus = 0.25
 
 [terrains.jade_mine]
 name = "玉矿"
@@ -317,6 +339,8 @@ jobs = 20
 building_slots = 3
 reclaim_skill = "luxury"
 reclaim_labor = 900.0
+move_cost = 2
+defense_bonus = 0.25
 
 [terrains.pasture]
 name = "草场"
@@ -326,6 +350,21 @@ jobs = 30
 building_slots = 3
 reclaim_skill = "horse_breeding"
 reclaim_labor = 450.0
+move_cost = 1
+
+[terrains.mountain]
+name = "高山"
+symbol = "山"
+housing = 0
+jobs = 0
+building_slots = 0
+
+[terrains.river]
+name = "大河"
+symbol = "河"
+housing = 0
+jobs = 0
+building_slots = 0
 
 # ---------------------------------------------------------------- 配方
 # outputs：每人每回合的产出；inputs：每人每回合消耗的原料
@@ -396,6 +435,28 @@ name = "制甲"
 skill = "armory"
 inputs = { hide = 0.006667 }
 outputs = { armor = 0.003333 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[recipes.chariot]
+name = "造战车"
+skill = "armory"
+facility = "foundry"
+inputs = { bronze = 0.003333, hide = 0.003333 }
+outputs = { chariot = 0.0008333 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[recipes.bow]
+name = "制弓矢"
+skill = "armory"
+inputs = { hide = 0.003333 }
+outputs = { bow = 0.003333 }
+season_mult = [1.0, 1.0, 1.0, 1.0]
+
+[recipes.siege_engine]
+name = "造攻城机"
+skill = "armory"
+inputs = { bronze = 0.006667, hide = 0.006667 }
+outputs = { siege_engine = 0.0006667 }
 season_mult = [1.0, 1.0, 1.0, 1.0]
 
 [recipes.ding]
@@ -494,3 +555,135 @@ season_mult = [0.5, 0.2, 0.5, 1.0]
 terrains = ["farmland"]
 max_level = 2
 yield_bonus = 0.25
+
+# ---------------------------------------------------------------- 军事
+[military]
+# 技能槽里有这项技能的人才能当兵；技能槽里只有这一项的是脱产精兵，平时由府库供养
+skill = "martial"
+# 完全没有必需装备的兵，战斗力只剩这个比例；装备不全时按缺的比例折算
+unequipped_mult = 0.5
+
+[combat]
+# 战斗力 = 人数 × 兵种的攻击或防御 × 装备倍率 × 加成（带甲、地形、城墙）。没有随机，结果可复现
+# 每点战斗力每次交战杀死对方的人数。近战时守方用防御力还手，远程攻击对方不能还手
+lethality = 0.1
+# 远程攻击（弓矢、攻城机）的距离：隔一格
+ranged_range = 2
+# 全军带甲时防御增加的比例，带了一部分按比例算
+armor_bonus = 0.5
+# 守城墙的兵还手时战斗力增加的比例
+wall_bonus = 1.0
+
+[siege]
+# 城里有这种建筑才算有城墙；没建成的城墙等于没有城墙
+wall_building = "city_wall"
+wall_hp = 200.0
+center_hp = 20.0
+# 攻城机：步兵带着，隔一格就能打城墙。每架每次攻击打掉的防御值
+engine_good = "siege_engine"
+engine_damage = 5.0
+# 不用攻城机时，每点战斗力打掉的城墙、城中心防御值
+wall_rate = 0.01
+center_rate = 0.1
+# 修城墙：城墙不会自己回血，要派工人修；这回合挨了打就修不了
+repair_skill = "building"
+repair_per_100 = 10.0
+
+[occupation]
+# 城中人群对占领者的初始忠诚度 = base_loyalty + 管城者风评 × reputation_mult（这项最多 reputation_max）
+#   + 对旧主的忠诚度低于 grudge_below 时，每低 1 点加 grudge_mult（这项最多 grudge_max）。最高为忠诚度满值
+base_loyalty = 300.0
+reputation_mult = 5.0
+reputation_max = 400.0
+grudge_below = 300.0
+grudge_mult = 0.5
+grudge_max = 150.0
+
+[war]
+# 国与国之间（含同一国的封臣之间）没有理由就开战，扣这么多风评。牵涉无国籍的人不用理由
+unjustified_penalty = 20.0
+# 讲和之后双方多少回合内不能再开战
+truce_turns = 12
+# 国战结束时封臣还没去打国君指定的城，扣的风评；也成为国君征讨他的理由
+task_penalty = 10.0
+# 国君制止封臣之间的战争后，封臣每动手一次扣的风评；也成为国君征讨他的理由
+defy_penalty = 10.0
+
+[supply]
+# 出征（离开自己的城的地）的军队靠粮道供粮，粮从起点城的府库出，按全城人口的消耗标准算
+# 走粮道的兵种和人数：一条粮道固定这么多辎重兵，和粮道长短、前线人数无关
+unit = "supply"
+convoy = 2
+# 粮道每多一格，军粮（连辎重兵在内）多耗这个比例
+per_cell = 0.05
+# 断粮的第 n 个回合，战斗力再降 n × starve_rate：0.1 时依次剩 90%、70%、40%，第 4 回合溃散
+starve_rate = 0.1
+
+[vision]
+# 战争迷雾：每个人只看得到自己视野内的东西，视野不共享。地形公开
+# 自己拥有、管理、攻占的城：城的地块再往外几格
+city = 2
+# 自己统领的军队：所在的格子再往外几格；兵种可以用 vision 另设，一支军队取看得最远的
+army = 2
+
+# 别人的城只看得到大致人口
+[[vision.tiers]]
+min = 0
+name = "小邑"
+
+[[vision.tiers]]
+min = 300
+name = "中邑"
+
+[[vision.tiers]]
+min = 1000
+name = "大邑"
+
+[plunder]
+# 占领者劫掠府库或市民，可以按物品类别挑着抢，不挑就全拿；每座城每回合只能劫掠一次
+# 劫掠市民：所有人群的愉悦度、对占领者的忠诚度降低，占领者扣风评。按抢走的价值占民间财富的比例打折
+# 劫掠府库没有代价
+happiness_loss = 300.0
+loyalty_loss = 300.0
+reputation_loss = 10.0
+
+# 兵种。gear：必需的装备，每人多少件；optional：可以选带的装备，每人多少件。
+# 编军队时装备从府库领，精品也算（比如精兵算兵器）；遣散时还回府库
+# moves：每回合的行军力，走进一格花掉这一格地形的 move_cost；terrain_cost：这个兵种走某些地形的耗时，取代 move_cost
+# 一支军队混了几个兵种，行军力取最小的，每一格的耗时取最大的。行军力不够走下一格时，满行军力也能走一格
+# attack / defense：每人的近战攻击、防御；ranged：带了弓矢的人每人的远程攻击
+# move_after_attack：打完还能接着走（骑兵）
+# 车兵：一乘战车三人、四匹马
+[units.chariot]
+name = "车兵"
+gear = { chariot = 0.3333, horse = 1.3333 }
+moves = 3
+attack = 3.0
+defense = 2.0
+terrain_cost = { forest = 3, water = 3, copper_mine = 3, jade_mine = 3 }
+
+# 步兵：有兵器就能近战；带甲更好；带弓矢就是远程兵；带攻城机能攻城墙（每 50 人一架）
+[units.infantry]
+name = "步兵"
+gear = { weapon = 1.0 }
+optional = { armor = 1.0, bow = 1.0, siege_engine = 0.02 }
+moves = 2
+attack = 1.0
+defense = 1.0
+ranged = 1.0
+
+[units.cavalry]
+name = "骑兵"
+gear = { horse = 1.0 }
+moves = 4
+attack = 2.0
+defense = 1.0
+move_after_attack = true
+vision = 3
+
+# 辎重：不需要装备，在粮道上运粮
+[units.supply]
+name = "辎重"
+moves = 2
+attack = 0.2
+defense = 0.3

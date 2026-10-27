@@ -15,7 +15,10 @@ use crate::command::{Command, CommandError, execute};
 use crate::config::Config;
 use crate::inventory::Inventory;
 use crate::map::{Hex, Map};
-use crate::state::{Building, Character, City, Country, CityStatus, GameState, Id, Mode, Official, PopGroup, Quota, Task, Tile, Tribute};
+use crate::state::{
+    Building, Character, City, CityStatus, Country, GameState, Id, Mode, Official, PopGroup, Quota,
+    Task, Tile, Tribute,
+};
 
 #[derive(Debug, Error)]
 pub enum ScenarioError {
@@ -188,14 +191,17 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
     let scenario: Scenario = toml::from_str(text)?;
     let mut state = GameState::default();
     let mut keys: BTreeMap<String, Id> = BTreeMap::new();
-    let register = |keys: &mut BTreeMap<String, Id>, key: &str, id: Id| -> Result<(), ScenarioError> {
-        match keys.insert(key.to_string(), id) {
-            Some(_) => Err(ScenarioError::DuplicateKey(key.to_string())),
-            None => Ok(()),
-        }
-    };
+    let register =
+        |keys: &mut BTreeMap<String, Id>, key: &str, id: Id| -> Result<(), ScenarioError> {
+            match keys.insert(key.to_string(), id) {
+                Some(_) => Err(ScenarioError::DuplicateKey(key.to_string())),
+                None => Ok(()),
+            }
+        };
     let lookup = |keys: &BTreeMap<String, Id>, key: &str| -> Result<Id, ScenarioError> {
-        keys.get(key).copied().ok_or_else(|| ScenarioError::UnknownKey(key.to_string()))
+        keys.get(key)
+            .copied()
+            .ok_or_else(|| ScenarioError::UnknownKey(key.to_string()))
     };
 
     // 每座城的地块位置：手画地图时从归属层读出，否则围着治所排开
@@ -203,8 +209,15 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
     match &scenario.map {
         Some(map) => {
             state.map = parse_map(map, config)?;
-            let marks: Vec<String> =
-                scenario.cities.iter().map(|c| c.mark.clone().unwrap_or_else(|| c.name.chars().take(1).collect())).collect();
+            let marks: Vec<String> = scenario
+                .cities
+                .iter()
+                .map(|c| {
+                    c.mark
+                        .clone()
+                        .unwrap_or_else(|| c.name.chars().take(1).collect())
+                })
+                .collect();
             land = vec![Vec::new(); scenario.cities.len()];
             for (row, line) in map.owners.iter().enumerate() {
                 for (col, token) in line.split_whitespace().enumerate() {
@@ -212,39 +225,61 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
                         continue;
                     }
                     let pos = Hex::from_offset(col as i32, row as i32);
-                    let city = marks
-                        .iter()
-                        .position(|m| m == token)
-                        .ok_or_else(|| ScenarioError::BadMap(format!("归属层第 {row} 行的「{token}」不是哪座城的 mark")))?;
-                    let cell = state
-                        .map
-                        .get(pos)
-                        .ok_or_else(|| ScenarioError::BadMap(format!("归属层 {pos} 在地形层里没有格子")))?;
+                    let city = marks.iter().position(|m| m == token).ok_or_else(|| {
+                        ScenarioError::BadMap(format!(
+                            "归属层第 {row} 行的「{token}」不是哪座城的 mark"
+                        ))
+                    })?;
+                    let cell = state.map.get(pos).ok_or_else(|| {
+                        ScenarioError::BadMap(format!("归属层 {pos} 在地形层里没有格子"))
+                    })?;
                     land[city].push((pos, cell.terrain.clone()));
                 }
             }
             for (def, cells) in scenario.cities.iter().zip(&land) {
                 if !def.tiles.is_empty() {
-                    return Err(ScenarioError::BadMap(format!("画了地图时，城市「{}」不能再写 tiles", def.name)));
+                    return Err(ScenarioError::BadMap(format!(
+                        "画了地图时，城市「{}」不能再写 tiles",
+                        def.name
+                    )));
                 }
                 if cells.is_empty() {
-                    return Err(ScenarioError::BadMap(format!("城市「{}」在地图上没有地", def.name)));
+                    return Err(ScenarioError::BadMap(format!(
+                        "城市「{}」在地图上没有地",
+                        def.name
+                    )));
                 }
             }
         }
         None => {
             for (i, def) in scenario.cities.iter().enumerate() {
                 let seat = Hex::from_offset(i as i32 * AUTO_SPACING, 0);
-                let terrains = def.tiles.iter().flat_map(|(t, n)| std::iter::repeat_n(t.clone(), *n as usize));
+                let terrains = def
+                    .tiles
+                    .iter()
+                    .flat_map(|(t, n)| std::iter::repeat_n(t.clone(), *n as usize));
                 let cells: Vec<(Hex, String)> = seat.spiral().zip(terrains).collect();
                 for (pos, terrain) in &cells {
                     if !config.terrains.contains_key(terrain) {
-                        return Err(ScenarioError::UnknownId { kind: "地块", id: terrain.clone() });
+                        return Err(ScenarioError::UnknownId {
+                            kind: "地块",
+                            id: terrain.clone(),
+                        });
                     }
                     state.map.insert(*pos, terrain.clone());
                 }
                 land.push(cells);
             }
+        }
+    }
+
+    for (def, cells) in scenario.cities.iter().zip(&land) {
+        if let Some((pos, terrain)) = cells.iter().find(|(_, t)| !config.terrains[t].passable()) {
+            let name = &config.terrains[terrain].name;
+            return Err(ScenarioError::BadMap(format!(
+                "城市「{}」的 {pos} 是{name}，过不去的地形不能属于城市",
+                def.name
+            )));
         }
     }
 
@@ -259,7 +294,10 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
         let id = state.alloc_id();
         register(&mut keys, &def.key, id)?;
         if !config.ritual.ding_limit.contains_key(&def.rank) {
-            return Err(ScenarioError::UnknownId { kind: "爵位", id: def.rank.clone() });
+            return Err(ScenarioError::UnknownId {
+                kind: "爵位",
+                id: def.rank.clone(),
+            });
         }
         check_goods(&def.private_store, config)?;
         let mut character = Character::new(id, def.name.clone(), def.rank.clone(), def.reputation);
@@ -267,7 +305,10 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
         if let Some(country) = &def.nationality {
             let country = lookup(&keys, country)?;
             if !country_ids.contains(&country) {
-                return Err(ScenarioError::UnknownId { kind: "国家", id: def.nationality.clone().unwrap_or_default() });
+                return Err(ScenarioError::UnknownId {
+                    kind: "国家",
+                    id: def.nationality.clone().unwrap_or_default(),
+                });
             }
             character.nationality = Some(country);
         }
@@ -276,9 +317,21 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
 
     for (def, id) in scenario.countries.iter().zip(&country_ids) {
         let ruler = lookup(&keys, &def.ruler)?;
-        let character = state.characters.get_mut(&ruler).ok_or_else(|| ScenarioError::UnknownKey(def.ruler.clone()))?;
+        let character = state
+            .characters
+            .get_mut(&ruler)
+            .ok_or_else(|| ScenarioError::UnknownKey(def.ruler.clone()))?;
         character.nationality = Some(*id);
-        state.countries.insert(*id, Country { id: *id, name: def.name.clone(), ruler, capital: None, national_war: false });
+        state.countries.insert(
+            *id,
+            Country {
+                id: *id,
+                name: def.name.clone(),
+                ruler,
+                capital: None,
+                national_war: false,
+            },
+        );
     }
 
     for (def, cells) in scenario.cities.iter().zip(land) {
@@ -289,7 +342,10 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
             None => cells.first().map_or(Hex::new(0, 0), |(pos, _)| *pos),
         };
         if !cells.iter().any(|(pos, _)| *pos == seat) {
-            return Err(ScenarioError::BadMap(format!("城市「{}」的治所 {seat} 不是它自己的地", def.name)));
+            return Err(ScenarioError::BadMap(format!(
+                "城市「{}」的治所 {seat} 不是它自己的地",
+                def.name
+            )));
         }
         let mut tiles = BTreeMap::new();
         for (pos, terrain) in cells {
@@ -297,18 +353,32 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
             tiles.insert(id, Tile::new(id, pos, terrain));
         }
         // 开局的建筑依次放到第一块还有空位、允许建造的地块上
-        let buildings = [(Mode::Guan, &def.guan_buildings), (Mode::Min, &def.min_buildings)];
-        for (mode, building, count) in buildings.iter().flat_map(|(m, b)| b.iter().map(move |(id, n)| (*m, id, *n))) {
+        let buildings = [
+            (Mode::Guan, &def.guan_buildings),
+            (Mode::Min, &def.min_buildings),
+        ];
+        for (mode, building, count) in buildings
+            .iter()
+            .flat_map(|(m, b)| b.iter().map(move |(id, n)| (*m, id, *n)))
+        {
             let Some(allowed) = config.buildings.get(building).map(|b| &b.terrains) else {
-                return Err(ScenarioError::UnknownId { kind: "建筑", id: building.clone() });
+                return Err(ScenarioError::UnknownId {
+                    kind: "建筑",
+                    id: building.clone(),
+                });
             };
             for _ in 0..count {
                 let tile = tiles
                     .values_mut()
                     .filter(|t| allowed.is_empty() || allowed.contains(&t.terrain))
-                    .find(|t| (t.buildings.len() as u32) < config.terrains[&t.terrain].building_slots)
+                    .find(|t| {
+                        (t.buildings.len() as u32) < config.terrains[&t.terrain].building_slots
+                    })
                     .ok_or_else(|| ScenarioError::NoRoomFor(building.clone()))?;
-                tile.buildings.push(Building { kind: building.clone(), mode });
+                tile.buildings.push(Building {
+                    kind: building.clone(),
+                    mode,
+                });
             }
         }
         check_goods(&def.treasury, config)?;
@@ -324,13 +394,23 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
         for g in &def.groups {
             let id = state.alloc_id();
             register(&mut keys, &g.key, id)?;
-            let skills = if g.skills.is_empty() { vec![config.population.initial_skill.clone()] } else { g.skills.clone() };
+            let skills = if g.skills.is_empty() {
+                vec![config.population.initial_skill.clone()]
+            } else {
+                g.skills.clone()
+            };
             if skills.len() > config.population.max_skills {
-                return Err(ScenarioError::UnknownId { kind: "技能槽（超过上限）", id: g.key.clone() });
+                return Err(ScenarioError::UnknownId {
+                    kind: "技能槽（超过上限）",
+                    id: g.key.clone(),
+                });
             }
             for skill in &skills {
                 if !config.skills.contains_key(skill) {
-                    return Err(ScenarioError::UnknownId { kind: "技能", id: skill.clone() });
+                    return Err(ScenarioError::UnknownId {
+                        kind: "技能",
+                        id: skill.clone(),
+                    });
                 }
             }
             groups.insert(
@@ -355,7 +435,9 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
             let id = state.alloc_id();
             register(&mut keys, &o.key, id)?;
             let origin = lookup(&keys, &o.from_group)?;
-            let group = groups.get(&origin).ok_or_else(|| ScenarioError::UnknownKey(o.from_group.clone()))?;
+            let group = groups
+                .get(&origin)
+                .ok_or_else(|| ScenarioError::UnknownKey(o.from_group.clone()))?;
             let mut skills = group.skills.clone();
             if !skills.contains(&config.shi.skill) {
                 skills.push(config.shi.skill.clone());
@@ -374,7 +456,11 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
         }
 
         let owner = def.owner.as_deref().map(|k| lookup(&keys, k)).transpose()?;
-        let manager = def.manager.as_deref().map(|k| lookup(&keys, k)).transpose()?;
+        let manager = def
+            .manager
+            .as_deref()
+            .map(|k| lookup(&keys, k))
+            .transpose()?;
         state.cities.insert(
             city_id,
             City {
@@ -393,16 +479,27 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
                 officials,
                 assignments: BTreeMap::new(),
                 learning: BTreeMap::new(),
-                quota: def.quota.clone().map(|goods| Quota { goods, delivered: Inventory::default() }),
+                quota: def.quota.clone().map(|goods| Quota {
+                    goods,
+                    delivered: Inventory::default(),
+                }),
                 manager_offer: None,
                 sown: BTreeMap::new(),
                 liege: def.liege.as_deref().map(|k| lookup(&keys, k)).transpose()?,
                 fief_offer: None,
-                tribute: def.tribute.clone().map(|goods| Tribute { goods, ..Tribute::default() }),
+                tribute: def.tribute.clone().map(|goods| Tribute {
+                    goods,
+                    ..Tribute::default()
+                }),
                 tribute_shortfall_years: 0,
                 income: Inventory::default(),
                 last_income: None,
                 passage: BTreeMap::new(),
+                wall_damage: 0.0,
+                center_damage: 0.0,
+                wall_attacked: false,
+                plundered: false,
+                occupier: None,
             },
         );
 
@@ -413,11 +510,24 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
                 .iter()
                 .map(|(k, n)| Ok((lookup(&keys, k)?, *n)))
                 .collect::<Result<BTreeMap<_, _>, ScenarioError>>()?;
-            let task = resolve_task(&a.task, &state.cities[&city_id], &state.map, config)
-                .map_err(|msg| ScenarioError::BadTask { key: a.key.clone(), msg })?;
-            let command = Command::StartAssignment { city: city_id, shi, task, workers };
-            let created = execute(&mut state, config, &command)
-                .map_err(|source| ScenarioError::Assignment { key: a.key.clone(), source })?;
+            let task = resolve_task(&a.task, &state.cities[&city_id], &state.map, config).map_err(
+                |msg| ScenarioError::BadTask {
+                    key: a.key.clone(),
+                    msg,
+                },
+            )?;
+            let command = Command::StartAssignment {
+                city: city_id,
+                shi,
+                task,
+                workers,
+            };
+            let created = execute(&mut state, config, &command).map_err(|source| {
+                ScenarioError::Assignment {
+                    key: a.key.clone(),
+                    source,
+                }
+            })?;
             register(&mut keys, &a.key, created[0])?;
         }
     }
@@ -425,9 +535,16 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
         if let Some(capital) = &def.capital {
             let city = lookup(&keys, capital)?;
             if !state.cities.contains_key(&city) {
-                return Err(ScenarioError::UnknownId { kind: "城市", id: capital.clone() });
+                return Err(ScenarioError::UnknownId {
+                    kind: "城市",
+                    id: capital.clone(),
+                });
             }
-            state.countries.get_mut(id).expect("country inserted above").capital = Some(city);
+            state
+                .countries
+                .get_mut(id)
+                .expect("country inserted above")
+                .capital = Some(city);
         }
     }
     state.settle_locations();
@@ -446,14 +563,21 @@ fn parse_map(def: &MapDef, config: &Config) -> Result<Map, ScenarioError> {
                 .iter()
                 .find(|(_, t)| t.symbol == token)
                 .map(|(id, _)| id.clone())
-                .ok_or_else(|| ScenarioError::BadMap(format!("第 {row} 行的「{token}」不是哪种地形的 symbol")))?;
+                .ok_or_else(|| {
+                    ScenarioError::BadMap(format!("第 {row} 行的「{token}」不是哪种地形的 symbol"))
+                })?;
             map.insert(Hex::from_offset(col as i32, row as i32), terrain);
         }
     }
     Ok(map)
 }
 
-fn resolve_task(raw: &toml::Table, city: &City, map: &Map, config: &Config) -> Result<Task, String> {
+fn resolve_task(
+    raw: &toml::Table,
+    city: &City,
+    map: &Map,
+    config: &Config,
+) -> Result<Task, String> {
     let mut raw = raw.clone();
     // 开垦用 at = [列, 行] 指定格子，地形从地图上读
     if let Some(at) = raw.remove("at") {
@@ -467,7 +591,8 @@ fn resolve_task(raw: &toml::Table, city: &City, map: &Map, config: &Config) -> R
         table.insert("q".into(), toml::Value::Integer(pos.q.into()));
         table.insert("r".into(), toml::Value::Integer(pos.r.into()));
         raw.insert("at".into(), toml::Value::Table(table));
-        raw.entry("terrain").or_insert_with(|| toml::Value::String(cell.terrain.clone()));
+        raw.entry("terrain")
+            .or_insert_with(|| toml::Value::String(cell.terrain.clone()));
     }
     if let Some(on) = raw.remove("on") {
         let terrain = on.as_str().ok_or("on 必须是地块种类")?;
@@ -475,7 +600,10 @@ fn resolve_task(raw: &toml::Table, city: &City, map: &Map, config: &Config) -> R
         let tile = city
             .tiles
             .values()
-            .find(|t| t.terrain == terrain && (!is_construct || city.free_building_slots(t.id, config) > 0))
+            .find(|t| {
+                t.terrain == terrain
+                    && (!is_construct || city.free_building_slots(t.id, config) > 0)
+            })
             .ok_or_else(|| format!("没有可用的「{terrain}」地块"))?;
         raw.insert("tile".into(), toml::Value::Integer(tile.id as i64));
     }
@@ -485,7 +613,10 @@ fn resolve_task(raw: &toml::Table, city: &City, map: &Map, config: &Config) -> R
 fn check_goods(inventory: &Inventory, config: &Config) -> Result<(), ScenarioError> {
     for good in inventory.0.keys() {
         if !config.goods.contains_key(good) {
-            return Err(ScenarioError::UnknownId { kind: "物品", id: good.clone() });
+            return Err(ScenarioError::UnknownId {
+                kind: "物品",
+                id: good.clone(),
+            });
         }
     }
     Ok(())
