@@ -1,7 +1,7 @@
 [gd_scene format=3]
 
 [node name="RightPanel" type="TabContainer"]
-custom_minimum_size = Vector2(400, 300)
+custom_minimum_size = Vector2(480, 300)
 [node name="详情" type="ScrollContainer" parent="."]
 horizontal_scroll_mode = 0
 [node name="Margin" type="MarginContainer" parent="详情"]

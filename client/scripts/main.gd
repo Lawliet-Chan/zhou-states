@@ -69,7 +69,15 @@ func _make_theme() -> Theme:
 	var f := SystemFont.new()
 	f.font_names = PackedStringArray(["Hiragino Sans GB", "PingFang SC", "Heiti SC", "Noto Sans CJK SC", "Microsoft YaHei", "sans-serif"])
 	t.default_font = f
-	t.default_font_size = 15
+	t.default_font_size = 20
+	# 控件留白随字号一起增大，方便全屏阅读和点击
+	var button_style := StyleBoxFlat.new()
+	button_style.bg_color = Color("#353535")
+	button_style.content_margin_left = 14
+	button_style.content_margin_right = 14
+	button_style.content_margin_top = 10
+	button_style.content_margin_bottom = 10
+	t.set_stylebox("normal", "Button", button_style)
 	return t
 
 
