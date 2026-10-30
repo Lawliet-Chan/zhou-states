@@ -43,9 +43,11 @@ fn yes() -> bool {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
-    /// 登录成功：眼下的情况，以及上一回合结算的报告（如果有）
+    /// 登录成功：眼下的情况，上一回合结算的报告（如果有），以及全部数值配置（名称、兵种、物品类别……）。
+    /// 配置只在登录时发一次
     Welcome {
         player: Id,
+        config: Box<Config>,
         view: Box<PlayerReport>,
         last_turn: Option<Box<PlayerReport>>,
     },
@@ -135,6 +137,7 @@ impl Game {
                     conn,
                     ServerMsg::Welcome {
                         player,
+                        config: Box::new(self.config.clone()),
                         view,
                         last_turn,
                     },

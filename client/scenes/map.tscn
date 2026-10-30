@@ -1,0 +1,13 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/map_view.gd" id="1"]
+
+[node name="Map" type="VBoxContainer"]
+size_flags_horizontal = 3
+theme_override_constants/separation = 0
+[node name="View" type="Control" parent="."]
+size_flags_vertical = 3
+custom_minimum_size = Vector2(400, 300)
+script = ExtResource("1")
+[node name="Hint" type="Label" parent="."]
+text = "左键选中，右键行军，拖动平移，滚轮缩放"

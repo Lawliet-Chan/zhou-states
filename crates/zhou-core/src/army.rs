@@ -3,6 +3,7 @@
 //! 当兵的人离开原来的人群和岗位，遣散时回去。军队属于编成它的城，由这座城的所有者统领；
 //! 城被攻占时由占领者统领。
 
+use crate::fx::Fx;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -57,10 +58,10 @@ pub struct Squad {
     pub group: Id,
     pub skills: Vec<String>,
     pub totem: String,
-    pub culture: f64,
-    pub happiness: f64,
-    pub loyalty: f64,
-    pub hostility: f64,
+    pub culture: Fx,
+    pub happiness: Fx,
+    pub loyalty: Fx,
+    pub hostility: Fx,
     /// 从哪些工事里抽出来的：工事 id → 人数。遣散时工事还在就回去
     #[serde(default)]
     pub posts: BTreeMap<Id, u32>,
@@ -71,26 +72,26 @@ pub struct Squad {
 
 impl Squad {
     /// 必需装备的齐备程度，0 到 1。精品也算。
-    pub fn equipped(&self, config: &Config) -> f64 {
+    pub fn equipped(&self, config: &Config) -> Fx {
         let def = &config.units[&self.unit];
         def.gear
             .iter()
             .map(|(good, per)| {
-                let need = per * self.count as f64;
-                if need <= 0.0 {
-                    return 1.0;
+                let need = *per * self.count;
+                if need <= Fx::ZERO {
+                    return Fx::ONE;
                 }
                 let fine = config.goods[good].fine.as_deref();
-                let have = self.gear.get(good) + fine.map_or(0.0, |f| self.gear.get(f));
-                (have / need).min(1.0)
+                let have = self.gear.get(good) + fine.map_or(Fx::ZERO, |f| self.gear.get(f));
+                (have / need).min(Fx::ONE)
             })
-            .fold(1.0, f64::min)
+            .fold(Fx::ONE, Fx::min)
     }
 
     /// 装备带来的战斗力倍率：装备齐全时为 1，完全没有时为 `military.unequipped_mult`。
-    pub fn gear_mult(&self, config: &Config) -> f64 {
+    pub fn gear_mult(&self, config: &Config) -> Fx {
         let ratio = self.equipped(config);
-        ratio + (1.0 - ratio) * config.military.unequipped_mult
+        ratio + (Fx::ONE - ratio) * config.military.unequipped_mult
     }
 
     /// 脱产精兵：技能槽只有「军武」一项，由府库供养。
@@ -180,7 +181,7 @@ pub fn raise(
             return Err(CommandError::ZeroCount);
         }
         for extra in &order.extras {
-            if def.optional.get(extra) <= 0.0 {
+            if def.optional.get(extra) <= Fx::ZERO {
                 return Err(CommandError::NotOptionalGear {
                     unit: def.name.clone(),
                     good: extra.clone(),
@@ -228,7 +229,7 @@ pub fn raise(
                 .filter(|(g, _)| order.extras.contains(g)),
         );
         for (good, per) in carried {
-            let mut need = per * order.count as f64;
+            let mut need = *per * order.count;
             let fine = config.goods[good].fine.as_deref();
             for g in std::iter::once(good.as_str()).chain(fine) {
                 let taken = city.treasury.take(g, need);
@@ -367,10 +368,10 @@ fn return_people(city: &mut City, squad: &Squad, next_id: &mut Id) -> Id {
                 .find(|g| g.skills == squad.skills && g.totem == squad.totem)
         })
         .map(|g| g.id);
-    let n = squad.count as f64;
+    let n = squad.count;
     if let Some(group) = home.and_then(|id| city.groups.get_mut(&id)) {
-        let total = (group.size as f64 + n).max(1.0);
-        let mix = |a: f64, b: f64| (a * group.size as f64 + b * n) / total;
+        let total = (group.size + n).max(1);
+        let mix = |a: Fx, b: Fx| (a * group.size + b * n) / total;
         group.culture = mix(group.culture, squad.culture);
         group.happiness = mix(group.happiness, squad.happiness);
         group.loyalty = mix(group.loyalty, squad.loyalty);
@@ -391,7 +392,7 @@ fn return_people(city: &mut City, squad: &Squad, next_id: &mut Id) -> Id {
             culture: squad.culture,
             happiness: squad.happiness,
             loyalty: squad.loyalty,
-            growth_carry: 0.0,
+            growth_carry: Fx::ZERO,
             hostility: squad.hostility,
         },
     );

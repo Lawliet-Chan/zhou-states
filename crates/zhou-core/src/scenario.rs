@@ -5,6 +5,7 @@
 //! - 手画：`[map]` 里用地形的符号一行一行画出地图，再用城市的 mark 画一层归属；
 //! - 不画：城市只写各种地块的块数，加载时各城相隔很远，地块围着治所由近及远排开。
 
+use crate::fx::Fx;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -85,7 +86,7 @@ struct CharacterDef {
     #[serde(default = "default_rank")]
     rank: String,
     #[serde(default)]
-    reputation: f64,
+    reputation: Fx,
     /// 私库
     #[serde(default)]
     private_store: Inventory,
@@ -124,7 +125,7 @@ struct CityDef {
     /// 民间财富
     #[serde(default)]
     private_wealth: Inventory,
-    tax_rate: Option<f64>,
+    tax_rate: Option<Fx>,
     /// 规定任务：每年要上缴给所有者的物资
     quota: Option<Inventory>,
     /// 封君：把这座城封给所有者的人
@@ -154,13 +155,13 @@ struct GroupDef {
     /// 不填则使用城市的文化图腾
     totem: Option<String>,
     #[serde(default)]
-    culture: f64,
-    happiness: f64,
+    culture: Fx,
+    happiness: Fx,
     /// 对管理者的忠诚度，不填为配置中的初始值
-    loyalty: Option<f64>,
+    loyalty: Option<Fx>,
     /// 对封君的敌视
     #[serde(default)]
-    hostility: f64,
+    hostility: Fx,
 }
 
 /// 开局即在任的士人，视为经验已满。
@@ -170,7 +171,7 @@ struct OfficialDef {
     name: String,
     /// 出身的人群，决定他的技能槽
     from_group: String,
-    loyalty: Option<f64>,
+    loyalty: Option<Fx>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -424,7 +425,7 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
                     culture: g.culture,
                     happiness: g.happiness,
                     loyalty: g.loyalty.unwrap_or(config.loyalty.initial),
-                    growth_carry: 0.0,
+                    growth_carry: Fx::ZERO,
                     hostility: g.hostility,
                 },
             );
@@ -495,8 +496,8 @@ pub fn from_toml(text: &str, config: &Config) -> Result<GameState, ScenarioError
                 income: Inventory::default(),
                 last_income: None,
                 passage: BTreeMap::new(),
-                wall_damage: 0.0,
-                center_damage: 0.0,
+                wall_damage: Fx::ZERO,
+                center_damage: Fx::ZERO,
                 wall_attacked: false,
                 plundered: false,
                 occupier: None,

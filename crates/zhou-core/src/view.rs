@@ -1,9 +1,11 @@
 //! 发给每个玩家的报告：从全局的回合报告里只挑出他看得到的部分。服务器只把这一份发给他，
 //! 不靠客户端隐藏。
 
+use crate::fx::Fx;
 use serde::Serialize;
 
 use crate::config::Config;
+use crate::deal::Deal;
 use crate::event::Event;
 use crate::fief::Grievance;
 use crate::map::Hex;
@@ -41,6 +43,21 @@ pub struct PlayerReport {
     pub countries: Vec<Country>,
     /// 战争是公开的
     pub wars: Vec<War>,
+    /// 别人给他的、还没答复的任命和封授
+    pub offers: Vec<Offer>,
+    /// 他提出的和别人向他提出的交易，当回合有效
+    pub deals: Vec<Deal>,
+}
+
+/// 一份等他答复的任命或封授。
+#[derive(Debug, Clone, Serialize)]
+pub struct Offer {
+    /// `management` 管理权任命，`fief` 封授
+    pub kind: String,
+    pub city: Id,
+    pub city_name: String,
+    /// 提出的人：城的所有者
+    pub from: Option<Id>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,7 +90,7 @@ pub struct PublicCharacter {
     pub id: Id,
     pub name: String,
     pub rank: String,
-    pub reputation: f64,
+    pub reputation: Fx,
     pub nationality: Option<Id>,
 }
 
@@ -169,5 +186,28 @@ pub fn player_report(
             .collect(),
         countries: report.countries.clone(),
         wars: report.wars.clone(),
+        offers: state
+            .cities
+            .values()
+            .flat_map(|c| {
+                let offer = |kind: &str| Offer {
+                    kind: kind.into(),
+                    city: c.id,
+                    city_name: c.name.clone(),
+                    from: c.owner,
+                };
+                [
+                    (c.manager_offer == Some(who)).then(|| offer("management")),
+                    (c.fief_offer == Some(who)).then(|| offer("fief")),
+                ]
+            })
+            .flatten()
+            .collect(),
+        deals: state
+            .deals
+            .values()
+            .filter(|d| d.from == who || d.to == who)
+            .cloned()
+            .collect(),
     }
 }

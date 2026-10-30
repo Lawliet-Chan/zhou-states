@@ -1,5 +1,6 @@
 //! 指令：玩家和 AI 的所有操作都通过这里，先校验，再执行。
 
+use crate::fx::Fx;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -48,7 +49,7 @@ pub enum Command {
     },
     SetTaxRate {
         city: Id,
-        rate: f64,
+        rate: Fx,
     },
     /// 赏赐民众：把府库中的物资转入民间财富
     Grant {
@@ -456,8 +457,8 @@ pub enum CommandError {
     SacrificeTakesNoWorkers,
     #[error("府库中没有礼器，无法祭祀")]
     NoVessel,
-    #[error("税率必须在 0 到 {0} 之间")]
-    InvalidTaxRate(f64),
+    #[error("税率必须在 0 到 {0} 之间（千分之一为单位）")]
+    InvalidTaxRate(i64),
     #[error("「{pool}」只能再容纳 {available} 人劳作，不足 {requested} 人")]
     NoJobs {
         pool: String,
@@ -658,7 +659,7 @@ fn apply_inner(
             city.tribute_shortfall_years = 0;
             city.passage.clear();
             for group in city.groups.values_mut() {
-                group.hostility = 0.0;
+                group.hostility = Fx::ZERO;
             }
             army::transfer(state, city_id, actor);
             let city = city_mut(state, city_id)?;
@@ -928,7 +929,7 @@ fn check_goods(config: &Config, goods: &Inventory) -> Result<(), CommandError> {
         if !config.goods.contains_key(good) {
             return Err(CommandError::NoSuchGood(good.clone()));
         }
-        if *amount <= 0.0 {
+        if *amount <= Fx::ZERO {
             return Err(CommandError::ZeroCount);
         }
     }
@@ -942,7 +943,7 @@ fn check_treasury(config: &Config, city: &City, goods: &Inventory) -> Result<(),
         return Err(CommandError::ZeroCount);
     }
     for (good, amount) in goods.iter() {
-        if city.treasury.get(good) + 1e-9 < *amount {
+        if city.treasury.get(good) < *amount {
             return Err(CommandError::NotEnoughInTreasury(good.clone()));
         }
     }
@@ -993,8 +994,8 @@ pub(crate) fn execute(
         }
         Command::SetTaxRate { city, rate } => {
             let max = config.economy.max_tax_rate;
-            if !(0.0..=max).contains(rate) {
-                return Err(CommandError::InvalidTaxRate(max));
+            if !(Fx::ZERO..=max).contains(rate) {
+                return Err(CommandError::InvalidTaxRate(max.raw()));
             }
             city_mut(state, *city)?.tax_rate = *rate;
             Ok(vec![])
@@ -1009,8 +1010,8 @@ pub(crate) fn execute(
             // 受了赏赐，民众对管理者更忠诚：按人均得到的价值折算
             let population = city.population();
             if population > 0 {
-                let per_person = config.value_of(goods) / population as f64;
-                let gain = per_person * config.loyalty.grant_gain_per_value;
+                let gain =
+                    config.value_of(goods) * config.loyalty.grant_gain_per_value / population;
                 for group in city.groups.values_mut() {
                     group.loyalty = (group.loyalty + gain).min(config.loyalty.max);
                 }
@@ -1368,7 +1369,7 @@ fn start_assignment(
             check_labor(Some(&def.skill))?;
             if let Some(min) = def.min_specialization {
                 for group in workers.keys() {
-                    if config.specialization(city.groups[group].skills.len()) + 1e-9 < min {
+                    if config.specialization(city.groups[group].skills.len()) < min {
                         return Err(CommandError::SpecializationTooLow {
                             group: *group,
                             recipe: def.name.clone(),
@@ -1468,7 +1469,7 @@ fn start_assignment(
             if city.wall_hp(config).is_none() {
                 return Err(CommandError::NoWall);
             }
-            if city.wall_damage <= 0.0 {
+            if city.wall_damage <= Fx::ZERO {
                 return Err(CommandError::WallIntact);
             }
             if city
@@ -1498,13 +1499,13 @@ fn start_assignment(
             if !workers.is_empty() {
                 return Err(CommandError::SacrificeTakesNoWorkers);
             }
-            let vessels: f64 = config
+            let vessels: i64 = config
                 .sacrifice
                 .vessels
                 .keys()
                 .map(|g| city.treasury.get(g).floor())
                 .sum();
-            if vessels < 1.0 {
+            if vessels < 1 {
                 return Err(CommandError::NoVessel);
             }
         }
@@ -1524,7 +1525,7 @@ fn start_assignment(
             shi,
             task: task.clone(),
             workers: workers.clone(),
-            progress: 0.0,
+            progress: Fx::ZERO,
         },
     );
     Ok(vec![id])

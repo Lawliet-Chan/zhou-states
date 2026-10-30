@@ -1,3 +1,4 @@
+use crate::fx::Fx;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -86,8 +87,10 @@ impl GameState {
 
     /// 邻城增益：同一个所有者的其他城，治所相距不超过 `neighbor.range` 格的，每座给这座城的产出加一成，有上限。
     /// 返回产出的倍数。
-    pub fn neighbor_mult(&self, config: &Config, city: &City) -> f64 {
-        let Some(owner) = city.owner else { return 1.0 };
+    pub fn neighbor_mult(&self, config: &Config, city: &City) -> Fx {
+        let Some(owner) = city.owner else {
+            return Fx::ONE;
+        };
         let n = self
             .cities
             .values()
@@ -97,7 +100,7 @@ impl GameState {
                     && c.seat.distance(city.seat) <= config.neighbor.range
             })
             .count();
-        1.0 + (n as f64 * config.neighbor.bonus).min(config.neighbor.max)
+        Fx::ONE + (config.neighbor.bonus * n).min(config.neighbor.max)
     }
 
     /// 人物能待在这座城：城是他自己的；自己一座城都没有时，只能待在他管理的城。
@@ -219,7 +222,7 @@ pub struct Character {
     pub name: String,
     /// 爵位：tianzi / gong / hou / bo / zi / nan / none
     pub rank: String,
-    pub reputation: f64,
+    pub reputation: Fx,
     /// 已经因僭越扣过风评的超出量。僭越只扣一次，超出得更多时再扣多出的部分
     #[serde(default)]
     pub punished_ding_excess: u32,
@@ -231,7 +234,7 @@ pub struct Character {
     pub private_store: Inventory,
     /// 人物 id → 这个人对他的信任，没有记录时为初始值
     #[serde(default)]
-    pub trust: BTreeMap<Id, f64>,
+    pub trust: BTreeMap<Id, Fx>,
     /// 国籍，None 为无国籍
     #[serde(default)]
     pub nationality: Option<Id>,
@@ -247,7 +250,7 @@ pub struct Character {
 }
 
 impl Character {
-    pub fn new(id: Id, name: impl Into<String>, rank: impl Into<String>, reputation: f64) -> Self {
+    pub fn new(id: Id, name: impl Into<String>, rank: impl Into<String>, reputation: Fx) -> Self {
         Character {
             id,
             name: name.into(),
@@ -264,7 +267,7 @@ impl Character {
         }
     }
 
-    pub fn trust_in(&self, other: Id, config: &Config) -> f64 {
+    pub fn trust_in(&self, other: Id, config: &Config) -> Fx {
         self.trust
             .get(&other)
             .copied()
@@ -298,7 +301,7 @@ pub struct City {
     pub treasury: Inventory,
     /// 民间财富：民营产出归全城民众共有，城内各群人之间自动互通
     pub private_wealth: Inventory,
-    pub tax_rate: f64,
+    pub tax_rate: Fx,
     pub groups: BTreeMap<Id, PopGroup>,
     pub officials: BTreeMap<Id, Official>,
     pub assignments: BTreeMap<Id, Assignment>,
@@ -313,7 +316,7 @@ pub struct City {
     pub manager_offer: Option<Id>,
     /// 配方 → 今年播种的量（按有效人数折算的平均值）。没有记录时收成不受限，比如开局还没经过播种季
     #[serde(default)]
-    pub sown: BTreeMap<String, f64>,
+    pub sown: BTreeMap<String, Fx>,
     /// 封君：把这座城封给现在的所有者的人。封地不能收回
     #[serde(default)]
     pub liege: Option<Id>,
@@ -338,9 +341,9 @@ pub struct City {
     pub passage: BTreeMap<Id, u32>,
     /// 城墙、城中心被打掉的防御值。城墙不会自己回血，要派工人修
     #[serde(default)]
-    pub wall_damage: f64,
+    pub wall_damage: Fx,
     #[serde(default)]
-    pub center_damage: f64,
+    pub center_damage: Fx,
     /// 城墙这回合挨了打，修不了
     #[serde(default)]
     pub wall_attacked: bool,
@@ -391,23 +394,23 @@ impl City {
     }
 
     /// 城墙还剩的防御值；没有城墙（包括没建成）时为 None，打破了为 Some(0)。
-    pub fn wall_hp(&self, config: &Config) -> Option<f64> {
+    pub fn wall_hp(&self, config: &Config) -> Option<Fx> {
         let has_wall = self
             .tiles
             .values()
             .flat_map(|t| &t.buildings)
             .any(|b| b.kind == config.siege.wall_building);
-        has_wall.then(|| (config.siege.wall_hp - self.wall_damage).max(0.0))
+        has_wall.then(|| (config.siege.wall_hp - self.wall_damage).max(Fx::ZERO))
     }
 
     /// 城墙立着：有城墙，而且没被打破。
     pub fn wall_standing(&self, config: &Config) -> bool {
-        self.wall_hp(config).is_some_and(|hp| hp > 0.0)
+        self.wall_hp(config).is_some_and(|hp| hp > Fx::ZERO)
     }
 
     /// 所有者、管理者、城市状态带来的产能倍率。
-    pub fn efficiency(&self, config: &Config) -> f64 {
-        let mut mult = 1.0;
+    pub fn efficiency(&self, config: &Config) -> Fx {
+        let mut mult = Fx::ONE;
         if self.owner != self.manager {
             mult *= config.economy.absentee_mult;
         }
@@ -495,14 +498,14 @@ impl City {
                 let base = config.recipes[recipe].base_jobs.unwrap_or(0);
                 let mut slots = vec![JobSlot {
                     count: base,
-                    mult: 1.0,
+                    mult: Fx::ONE,
                     mode: None,
                 }];
                 for b in self.tiles.values().flat_map(|t| &t.buildings) {
                     if let Some(count) = config.buildings[&b.kind].jobs.get(recipe) {
                         slots.push(JobSlot {
                             count: *count,
-                            mult: 1.0,
+                            mult: Fx::ONE,
                             mode: Some(b.mode),
                         });
                     }
@@ -512,7 +515,7 @@ impl City {
         };
         slots.sort_by(|a: &JobSlot, b| {
             b.mult
-                .total_cmp(&a.mult)
+                .cmp(&a.mult)
                 .then(b.mode.is_some().cmp(&a.mode.is_some()))
         });
         slots
@@ -555,12 +558,12 @@ impl City {
         let Some(official) = self.officials.get(&official) else {
             return 0;
         };
-        let bonus: f64 = self
+        let bonus: Fx = self
             .buildings()
             .iter()
-            .map(|(id, n)| config.buildings[id].shi_capacity_bonus * *n as f64)
+            .map(|(id, n)| config.buildings[id].shi_capacity_bonus * *n)
             .sum();
-        (official.base_capacity(config) * (1.0 + bonus)).floor() as u32
+        (official.base_capacity(config) * (Fx::ONE + bonus)).floor_u32()
     }
 
     /// 某群人中被工事占用的劳力（生产、营建等）。学技能不占用劳力，可以一边干活一边学。
@@ -710,13 +713,12 @@ impl City {
         source.size -= count;
         let name = format!("{}·{}", source.name, config.skill_name(&skills[0]));
         if let Some(target) = existing.and_then(|id| self.groups.get_mut(&id)) {
-            let total = (target.size + count).max(1) as f64;
-            target.happiness =
-                (target.happiness * target.size as f64 + happiness * count as f64) / total;
-            target.culture = (target.culture * target.size as f64 + culture * count as f64) / total;
-            target.loyalty = (target.loyalty * target.size as f64 + loyalty * count as f64) / total;
-            target.hostility =
-                (target.hostility * target.size as f64 + hostility * count as f64) / total;
+            let total = (target.size + count).max(1);
+            let mix = |a: Fx, b: Fx| (a * target.size + b * count) / total;
+            target.happiness = mix(target.happiness, happiness);
+            target.culture = mix(target.culture, culture);
+            target.loyalty = mix(target.loyalty, loyalty);
+            target.hostility = mix(target.hostility, hostility);
             target.size += count;
             return target.id;
         }
@@ -733,7 +735,7 @@ impl City {
                 culture,
                 happiness,
                 loyalty,
-                growth_carry: 0.0,
+                growth_carry: Fx::ZERO,
                 hostility,
             },
         );
@@ -769,7 +771,7 @@ impl City {
 pub struct JobSlot {
     pub count: u32,
     /// 产量倍率，比如水利
-    pub mult: f64,
+    pub mult: Fx,
     /// 只供这种经营方式劳作，比如官营的市只容纳官营的商贾；None 表示都能用
     pub mode: Option<Mode>,
 }
@@ -808,10 +810,10 @@ impl Tile {
         }
     }
 
-    pub fn yield_mult(&self, config: &Config) -> f64 {
+    pub fn yield_mult(&self, config: &Config) -> Fx {
         self.improvements
             .iter()
-            .map(|(id, level)| 1.0 + config.improvements[id].yield_bonus * *level as f64)
+            .map(|(id, level)| Fx::ONE + config.improvements[id].yield_bonus * *level)
             .product()
     }
 
@@ -829,17 +831,17 @@ pub struct PopGroup {
     /// 技能槽，顺序有意义：未被管理时按第一项技能自主民营
     pub skills: Vec<String>,
     pub totem: String,
-    pub culture: f64,
-    pub happiness: f64,
+    pub culture: Fx,
+    pub happiness: Fx,
     /// 对现任管理者个人的忠诚度，换管理者时归零重来
     #[serde(default)]
-    pub loyalty: f64,
+    pub loyalty: Fx,
     /// 人口增长的小数部分，攒满 1 人再加入
-    pub growth_carry: f64,
+    pub growth_carry: Fx,
     /// 对封君的敌视：封君要的纳贡过火时产生。封君对封地发起的事，这些人的产能会降低，
     /// 面对封君的讨伐战斗力会升高（等征调和军队做出来后生效）
     #[serde(default)]
-    pub hostility: f64,
+    pub hostility: Fx,
 }
 
 impl PopGroup {
@@ -854,7 +856,7 @@ pub struct Official {
     pub id: Id,
     pub name: String,
     pub skills: Vec<String>,
-    pub loyalty: f64,
+    pub loyalty: Fx,
     /// 已任职的回合数，影响管理上限
     pub service_turns: u32,
     /// 原来所属的人群，罢免后回到这里
@@ -863,16 +865,16 @@ pub struct Official {
 
 impl Official {
     /// 能管理的人口上限，不含建筑加成。城中的实际上限见 `City::official_capacity`。
-    pub fn base_capacity(&self, config: &Config) -> f64 {
+    pub fn base_capacity(&self, config: &Config) -> Fx {
         let shi = &config.shi;
         let experience = if shi.ramp_turns == 0 {
-            1.0
+            Fx::ONE
         } else {
-            (self.service_turns as f64 / shi.ramp_turns as f64).min(1.0)
+            Fx::ratio(self.service_turns as i64, shi.ramp_turns as i64).min(Fx::ONE)
         };
-        let ramp = shi.new_capacity_ratio + (1.0 - shi.new_capacity_ratio) * experience;
-        let loyalty = (self.loyalty / shi.loyalty_max).clamp(0.0, 1.0);
-        let loyalty_mult = shi.loyalty_min_mult + (1.0 - shi.loyalty_min_mult) * loyalty;
+        let ramp = shi.new_capacity_ratio + (Fx::ONE - shi.new_capacity_ratio) * experience;
+        let loyalty = (self.loyalty / shi.loyalty_max).clamp(Fx::ZERO, Fx::ONE);
+        let loyalty_mult = shi.loyalty_min_mult + (Fx::ONE - shi.loyalty_min_mult) * loyalty;
         shi.base_capacity * config.specialization(self.skills.len()) * ramp * loyalty_mult
     }
 }
@@ -928,7 +930,7 @@ impl Task {
                 let def = &config.recipes[recipe];
                 if def
                     .min_specialization
-                    .is_some_and(|min| config.specialization(group.skills.len()) + 1e-9 < min)
+                    .is_some_and(|min| config.specialization(group.skills.len()) < min)
                 {
                     return false;
                 }
@@ -958,7 +960,7 @@ pub struct Assignment {
     /// 人群 id → 人数。收税时表示被覆盖的人数
     pub workers: BTreeMap<Id, u32>,
     /// 营建、改良、开垦的进度（人 × 回合）
-    pub progress: f64,
+    pub progress: Fx,
 }
 
 impl Assignment {

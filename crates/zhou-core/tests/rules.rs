@@ -4,9 +4,12 @@ use std::collections::BTreeMap;
 
 use zhou_core::scenario::from_toml;
 use zhou_core::{
-    Building, Character, Command, CommandError, Config, GameState, Hex, Id, Inventory, Mode, Pool,
-    Task, Tile, apply, end_turn,
+    Building, Character, Command, CommandError, Config, Fx, GameState, Hex, Id, Inventory, Mode,
+    Pool, Task, Tile, apply, end_turn,
 };
+
+/// 定点数逐步四舍五入，结果和精确值差几个千分之一
+const TOL: Fx = Fx::milli(10);
 
 fn config() -> Config {
     Config::from_toml(include_str!("../../../config/balance.toml")).expect("balance.toml is valid")
@@ -32,29 +35,29 @@ manager = "player"
 totem = "玄鸟"
 tiles = { farmland = 2, forest = 1 }
 guan_buildings = { foundry = 1 }
-treasury = { grain = 100, salt = 100, bronze = 50 }
-tax_rate = 0.2
+treasury = { grain = 100000, salt = 100000, bronze = 50000 }
+tax_rate = 200
 
 [[cities.groups]]
 key = "farmers"
 name = "农人"
 size = 100
 skills = ["farming", "weaving"]
-happiness = 600
+happiness = 600000
 
 [[cities.groups]]
 key = "artisans"
 name = "工匠"
 size = 20
 skills = ["smelting", "armory", "weaving", "hunting"]
-happiness = 600
+happiness = 600000
 
 [[cities.groups]]
 key = "gentry"
 name = "士族"
 size = 10
 skills = ["shi"]
-happiness = 600
+happiness = 600000
 
 [[cities.officials]]
 key = "a"
@@ -378,8 +381,8 @@ fn guan_output_goes_to_treasury_min_output_to_people() {
     .unwrap();
     end_turn(&mut state, &config);
     let city = &state.cities[&ids.city];
-    assert!(city.treasury.get("weapon") > 0.0);
-    assert_eq!(city.private_wealth.get("weapon"), 0.0);
+    assert!(city.treasury.get("weapon") > Fx::ZERO);
+    assert_eq!(city.private_wealth.get("weapon"), Fx::ZERO);
 
     let (mut state, ids) = setup(&config);
     start(
@@ -393,8 +396,8 @@ fn guan_output_goes_to_treasury_min_output_to_people() {
     .unwrap();
     end_turn(&mut state, &config);
     let city = &state.cities[&ids.city];
-    assert!(city.private_wealth.get("cloth") > 0.0);
-    assert_eq!(city.treasury.get("cloth"), 0.0);
+    assert!(city.private_wealth.get("cloth") > Fx::ZERO);
+    assert_eq!(city.treasury.get("cloth"), Fx::ZERO);
 }
 
 #[test]
@@ -419,7 +422,7 @@ fn guan_is_less_efficient_than_min() {
     let guan = output(Mode::Guan);
     let min = output(Mode::Min);
     assert!(
-        (guan / min - config.economy.guan_efficiency).abs() < 1e-9,
+        (guan / min - config.economy.guan_efficiency).abs() <= TOL,
         "官营 {guan}，民营 {min}"
     );
 }
@@ -452,8 +455,8 @@ fn unmanaged_people_work_their_first_skill_for_themselves() {
     state.turn = autumn(&config);
     end_turn(&mut state, &config);
     let city = &state.cities[&ids.city];
-    assert!(city.private_wealth.get("grain") > 0.0);
-    assert_eq!(city.private_wealth.get("cloth"), 0.0);
+    assert!(city.private_wealth.get("grain") > Fx::ZERO);
+    assert_eq!(city.private_wealth.get("cloth"), Fx::ZERO);
 }
 
 #[test]
@@ -482,13 +485,13 @@ fn tax_takes_rate_of_covered_peoples_income() {
     let (treasury_20, wealth_20) = run(20);
     let (treasury_40, _) = run(40);
     let tax_20 = treasury_20 - treasury_0;
-    assert!(tax_20 > 0.0);
+    assert!(tax_20 > Fx::ZERO);
     assert!(
-        (tax_20 - (wealth_0 - wealth_20)).abs() < 1e-9,
+        (tax_20 - (wealth_0 - wealth_20)).abs() <= TOL,
         "税从民间财富转入府库"
     );
     assert!(
-        (treasury_40 - treasury_0 - 2.0 * tax_20).abs() < 1e-9,
+        (treasury_40 - treasury_0 - Fx::int(2) * tax_20).abs() <= TOL,
         "覆盖人数加倍，税收加倍"
     );
 }
@@ -498,23 +501,24 @@ fn consumption_uses_private_wealth_before_treasury() {
     let config = config();
     let (mut state, ids) = setup(&config);
     // 全城 130 人每月需盐 need：民间只有 0.2，先用完，剩下的由府库补足
-    let need = 130.0 / config.population.per_people * config.population.consumption[1].amount;
+    let need =
+        Fx::int(130) / config.population.per_people * config.population.consumption[1].amount;
     state
         .cities
         .get_mut(&ids.city)
         .unwrap()
         .private_wealth
-        .add("salt", 0.2);
+        .add("salt", Fx::milli(200));
     end_turn(&mut state, &config);
     let city = &state.cities[&ids.city];
-    assert_eq!(city.private_wealth.get("salt"), 0.0);
-    assert!((city.treasury.get("salt") - (100.0 - (need - 0.2))).abs() < 1e-9);
+    assert_eq!(city.private_wealth.get("salt"), Fx::ZERO);
+    assert!((city.treasury.get("salt") - (Fx::int(100) - (need - Fx::milli(200)))).abs() <= TOL);
 }
 
 #[test]
 fn richer_people_are_happier() {
     let config = config();
-    let happiness = |private_grain: f64| {
+    let happiness = |private_grain: Fx| {
         let (mut state, ids) = setup(&config);
         state
             .cities
@@ -525,7 +529,7 @@ fn richer_people_are_happier() {
         end_turn(&mut state, &config);
         state.cities[&ids.city].groups[&ids.farmers].happiness
     };
-    assert!(happiness(50.0) > happiness(0.0));
+    assert!(happiness(Fx::int(50)) > happiness(Fx::ZERO));
 }
 
 #[test]
@@ -543,14 +547,14 @@ key = "farmers"
 name = "农人"
 size = 100
 skills = ["farming"]
-happiness = 600
+happiness = 600000
 
 [[cities.groups]]
 key = "salters"
 name = "盐户"
 size = 20
 skills = ["salt_making"]
-happiness = 600
+happiness = 600000
 "#;
     let mut state = from_toml(scenario, &config).unwrap();
     // 秋季：农人产粮、盐户产盐，府库为空，全城靠民间互通吃饱
@@ -573,7 +577,7 @@ fn shi_upkeep_comes_from_treasury_and_unpaid_shi_lose_loyalty() {
         .get_mut(&ids.city)
         .unwrap()
         .treasury
-        .take("grain", 1000.0);
+        .take("grain", Fx::int(1000));
     end_turn(&mut state, &config);
     let city = &state.cities[&ids.city];
     assert!(city.officials[&ids.shi_a].loyalty < loyalty);
@@ -627,7 +631,7 @@ fn sacrifice_needs_vessels_and_raises_culture() {
         .get_mut(&ids.city)
         .unwrap()
         .treasury
-        .add("gui", 2.0);
+        .add("gui", Fx::int(2));
     let before = state.cities[&ids.city].groups[&ids.farmers].culture;
     start(&mut state, &config, &ids, ids.shi_a, Task::Sacrifice, &[]).unwrap();
     end_turn(&mut state, &config);
@@ -646,48 +650,60 @@ fn owning_more_ding_than_rank_allows_costs_reputation() {
         .get_mut(&ids.city)
         .unwrap()
         .treasury
-        .add("ding", 3.0);
+        .add("ding", Fx::int(3));
     end_turn(&mut state, &config);
-    assert_eq!(state.characters[&ids.player].reputation, 0.0);
+    assert_eq!(state.characters[&ids.player].reputation, Fx::ZERO);
 
     state
         .cities
         .get_mut(&ids.city)
         .unwrap()
         .treasury
-        .add("ding", 2.0);
+        .add("ding", Fx::int(2));
     end_turn(&mut state, &config);
     let penalty = config.ritual.excess_reputation_penalty;
-    assert_eq!(state.characters[&ids.player].reputation, -2.0 * penalty);
+    assert_eq!(
+        state.characters[&ids.player].reputation,
+        -Fx::int(2) * penalty
+    );
 
     // 一直保持超出不再扣
     end_turn(&mut state, &config);
-    assert_eq!(state.characters[&ids.player].reputation, -2.0 * penalty);
+    assert_eq!(
+        state.characters[&ids.player].reputation,
+        -Fx::int(2) * penalty
+    );
     // 超出得更多，只扣多出的部分
     state
         .cities
         .get_mut(&ids.city)
         .unwrap()
         .treasury
-        .add("ding_fine", 1.0);
+        .add("ding_fine", Fx::ONE);
     end_turn(&mut state, &config);
-    assert_eq!(state.characters[&ids.player].reputation, -3.0 * penalty);
+    assert_eq!(
+        state.characters[&ids.player].reputation,
+        -Fx::int(3) * penalty
+    );
     // 减到上限以内后又超出，再扣一次
     state
         .cities
         .get_mut(&ids.city)
         .unwrap()
         .treasury
-        .take("ding", 3.0);
+        .take("ding", Fx::int(3));
     end_turn(&mut state, &config);
     state
         .cities
         .get_mut(&ids.city)
         .unwrap()
         .treasury
-        .add("ding", 1.0);
+        .add("ding", Fx::ONE);
     end_turn(&mut state, &config);
-    assert_eq!(state.characters[&ids.player].reputation, -4.0 * penalty);
+    assert_eq!(
+        state.characters[&ids.player].reputation,
+        -Fx::int(4) * penalty
+    );
 }
 
 #[test]
@@ -723,21 +739,21 @@ fn only_the_manager_can_command_the_city() {
     let steward = state.alloc_id();
     state
         .characters
-        .insert(steward, Character::new(steward, "家宰", "none", 0.0));
+        .insert(steward, Character::new(steward, "家宰", "none", Fx::ZERO));
     state.cities.get_mut(&ids.city).unwrap().manager = Some(steward);
 
     let command = Command::SetTaxRate {
         city: ids.city,
-        rate: 0.3,
+        rate: Fx::milli(300),
     };
     // 所有者不兼任管理者时，不能直接改税率
     assert_eq!(
         apply(&mut state, &config, ids.player, &command),
         Err(CommandError::NotManager(ids.city))
     );
-    assert_eq!(state.cities[&ids.city].tax_rate, 0.2);
+    assert_eq!(state.cities[&ids.city].tax_rate, Fx::milli(200));
     apply(&mut state, &config, steward, &command).unwrap();
-    assert_eq!(state.cities[&ids.city].tax_rate, 0.3);
+    assert_eq!(state.cities[&ids.city].tax_rate, Fx::milli(300));
 }
 
 fn farmland_tile(state: &GameState, ids: &Ids) -> Id {
@@ -946,13 +962,13 @@ fn population_stops_growing_at_housing_limit() {
         .get_mut(&ids.city)
         .unwrap()
         .treasury
-        .add("grain", 1000.0);
+        .add("grain", Fx::int(1000));
     state
         .cities
         .get_mut(&ids.city)
         .unwrap()
         .treasury
-        .add("salt", 1000.0);
+        .add("salt", Fx::int(1000));
     for _ in 0..40 {
         end_turn(&mut state, &config);
     }
@@ -967,7 +983,7 @@ fn overcrowding_lowers_happiness() {
         let housing = state.cities[&ids.city].housing(&config);
         let city = state.cities.get_mut(&ids.city).unwrap();
         city.groups.get_mut(&ids.artisans).unwrap().size = housing - 110 + extra;
-        city.treasury.add("grain", 1000.0);
+        city.treasury.add("grain", Fx::int(1000));
         end_turn(&mut state, &config);
         state.cities[&ids.city].groups[&ids.farmers].happiness
     };
@@ -1246,7 +1262,7 @@ fn dropping_and_reordering_skills_takes_effect_at_once() {
     );
     let report = end_turn(&mut state, &config);
     assert!(
-        report.cities[0].private_wealth.get("cloth") > 0.0,
+        report.cities[0].private_wealth.get("cloth") > Fx::ZERO,
         "未被管理时按第一项技能纺织"
     );
 }
@@ -1265,7 +1281,7 @@ tiles = { farmland = 1 }
 key = "people"
 name = "庶民"
 size = 10
-happiness = 600
+happiness = 600000
 "#;
     let state = from_toml(scenario, &config).unwrap();
     let group = state
@@ -1284,14 +1300,14 @@ happiness = 600
 fn granting_moves_goods_from_treasury_to_people() {
     let config = config();
     let (mut state, ids) = setup(&config);
-    let goods = |n: f64| Inventory(BTreeMap::from([("grain".to_string(), n)]));
+    let goods = |n: Fx| Inventory(BTreeMap::from([("grain".to_string(), n)]));
     let err = apply(
         &mut state,
         &config,
         ids.player,
         &Command::Grant {
             city: ids.city,
-            goods: goods(101.0),
+            goods: goods(Fx::int(101)),
         },
     );
     assert_eq!(err, Err(CommandError::NotEnoughInTreasury("grain".into())));
@@ -1301,13 +1317,13 @@ fn granting_moves_goods_from_treasury_to_people() {
         ids.player,
         &Command::Grant {
             city: ids.city,
-            goods: goods(40.0),
+            goods: goods(Fx::int(40)),
         },
     )
     .unwrap();
     let city = &state.cities[&ids.city];
-    assert_eq!(city.treasury.get("grain"), 60.0);
-    assert_eq!(city.private_wealth.get("grain"), 40.0);
+    assert_eq!(city.treasury.get("grain"), Fx::int(60));
+    assert_eq!(city.private_wealth.get("grain"), Fx::int(40));
 }
 
 #[test]
@@ -1336,9 +1352,9 @@ fn specialists_make_fine_goods_and_generalists_do_not() {
     end_turn(&mut state, &config);
     let city = &state.cities[&ids.city];
     let (cloth, fine) = (city.treasury.get("cloth"), city.treasury.get("cloth_fine"));
-    assert!((fine / (cloth + fine) - config.fine_share(2)).abs() < 1e-9);
-    assert!(city.treasury.get("weapon") > 0.0);
-    assert_eq!(city.treasury.get("weapon_fine"), 0.0);
+    assert!((fine / (cloth + fine) - config.fine_share(2)).abs() <= TOL);
+    assert!(city.treasury.get("weapon") > Fx::ZERO);
+    assert_eq!(city.treasury.get("weapon_fine"), Fx::ZERO);
 }
 
 #[test]
@@ -1395,9 +1411,9 @@ fn market_holds_more_merchants_and_earns_the_people_more() {
     // 没有市只能容纳 10 名商贾，有民营的市后 20 名工匠都能经商
     let without = coins(0);
     let with = coins(1);
-    assert!(without > 0.0);
+    assert!(without > Fx::ZERO);
     assert!(
-        (with / without - 2.0).abs() < 1e-9,
+        (with / without - Fx::int(2)).abs() <= TOL,
         "无市 {without}，有市 {with}"
     );
 }
@@ -1445,7 +1461,7 @@ fn guan_market_only_holds_guan_merchants() {
     assert_eq!(city.free_jobs(&config, &pool, Mode::Min), 10);
     let report = end_turn(&mut state, &config);
     assert!(
-        state.cities[&ids.city].treasury.get("coin") > 0.0,
+        state.cities[&ids.city].treasury.get("coin") > Fx::ZERO,
         "官营经商的钱币进府库"
     );
     let trade = report.cities[0]
@@ -1525,7 +1541,7 @@ fn guan_and_min_production_need_a_building_of_their_own_kind() {
         .get_mut(&ids.city)
         .unwrap()
         .private_wealth
-        .add("bronze", 10.0);
+        .add("bronze", Fx::int(10));
     let before = state.cities[&ids.city].private_wealth.get("weapon");
     end_turn(&mut state, &config);
     assert!(state.cities[&ids.city].private_wealth.get("weapon") > before);
@@ -1565,7 +1581,7 @@ fn city_larger_than_rank_allows_costs_reputation() {
     end_turn(&mut state, &config);
     assert_eq!(
         state.characters[&ids.player].reputation,
-        -2.0 * config.ritual.excess_tile_penalty,
+        -Fx::int(2) * config.ritual.excess_tile_penalty,
         "只扣一次"
     );
 }
@@ -1580,7 +1596,7 @@ fn fine_vessels_count_more_in_sacrifice() {
             .get_mut(&ids.city)
             .unwrap()
             .treasury
-            .add(vessel, 1.0);
+            .add(vessel, Fx::ONE);
         start(&mut state, &config, &ids, ids.shi_a, Task::Sacrifice, &[]).unwrap();
         end_turn(&mut state, &config);
         state.cities[&ids.city].groups[&ids.farmers].culture
@@ -1685,14 +1701,14 @@ name = "甲城"
 owner = "player"
 manager = "player"
 totem = "玄鸟"
-treasury = { grain = 300, salt = 100 }
+treasury = { grain = 300000, salt = 100000 }
 seat = [0, 0]
 
 [[cities.groups]]
 key = "a_farmers"
 name = "甲城农人"
 size = 100
-happiness = 600
+happiness = 600000
 
 [[cities.officials]]
 key = "a_shi"
@@ -1711,13 +1727,13 @@ name = "乙城"
 owner = "player"
 manager = "player"
 totem = "玄鸟"
-treasury = { grain = 300, salt = 100 }
+treasury = { grain = 300000, salt = 100000 }
 
 [[cities.groups]]
 key = "b_farmers"
 name = "乙城农人"
 size = 100
-happiness = 600
+happiness = 600000
 
 [[cities.officials]]
 key = "b_shi"
@@ -1856,7 +1872,7 @@ fn each_tile_holds_a_limited_number_of_buildings() {
         .get_mut(&ids.city)
         .unwrap()
         .treasury
-        .add("bronze", 100.0);
+        .add("bronze", Fx::int(100));
     // 再开工 1 座就满了，正在营建的也占位置
     start(
         &mut state,
@@ -1898,7 +1914,7 @@ fn add_steward(state: &mut GameState) -> Id {
     let steward = state.alloc_id();
     state
         .characters
-        .insert(steward, Character::new(steward, "家宰", "none", 0.0));
+        .insert(steward, Character::new(steward, "家宰", "none", Fx::ZERO));
     steward
 }
 
@@ -1973,7 +1989,7 @@ fn management_is_offered_accepted_and_revoked() {
     // 所有者不能直接管城内事务，但可以随时收回管理权，不用管理者同意
     let tax = Command::SetTaxRate {
         city: ids.city,
-        rate: 0.3,
+        rate: Fx::milli(300),
     };
     assert_eq!(
         apply(&mut state, &config, ids.player, &tax),
@@ -2023,34 +2039,50 @@ fn one_character_manages_only_one_city() {
 fn delivered_goods_go_to_the_owners_private_store_and_count_toward_the_quota() {
     let config = config();
     let (mut state, ids) = setup(&config);
-    let quota = |goods: &[(&str, f64)]| Command::SetQuota {
+    let quota = |goods: &[(&str, Fx)]| Command::SetQuota {
         city: ids.city,
         goods: Inventory(goods.iter().map(|(g, n)| (g.to_string(), *n)).collect()),
     };
     // 所有者自己管理时不需要规定任务
     assert_eq!(
-        apply(&mut state, &config, ids.player, &quota(&[("grain", 40.0)])),
+        apply(
+            &mut state,
+            &config,
+            ids.player,
+            &quota(&[("grain", Fx::int(40))])
+        ),
         Err(CommandError::OwnerIsManager)
     );
     let steward = hand_over(&mut state, &config, &ids);
     assert_eq!(
-        apply(&mut state, &config, steward, &quota(&[("grain", 40.0)])),
+        apply(
+            &mut state,
+            &config,
+            steward,
+            &quota(&[("grain", Fx::int(40))])
+        ),
         Err(CommandError::NotOwner(ids.city))
     );
-    apply(&mut state, &config, ids.player, &quota(&[("grain", 40.0)])).unwrap();
+    apply(
+        &mut state,
+        &config,
+        ids.player,
+        &quota(&[("grain", Fx::int(40))]),
+    )
+    .unwrap();
 
-    let deliver = |n: f64| Command::Deliver {
+    let deliver = |n: Fx| Command::Deliver {
         city: ids.city,
         goods: Inventory([("grain".to_string(), n)].into()),
     };
     assert_eq!(
-        apply(&mut state, &config, steward, &deliver(1000.0)),
+        apply(&mut state, &config, steward, &deliver(Fx::int(1000))),
         Err(CommandError::NotEnoughInTreasury("grain".into()))
     );
-    apply(&mut state, &config, steward, &deliver(30.0)).unwrap();
+    apply(&mut state, &config, steward, &deliver(Fx::int(30))).unwrap();
     assert_eq!(
         state.characters[&ids.player].private_store.get("grain"),
-        30.0
+        Fx::int(30)
     );
     assert_eq!(
         state.cities[&ids.city]
@@ -2059,9 +2091,9 @@ fn delivered_goods_go_to_the_owners_private_store_and_count_toward_the_quota() {
             .unwrap()
             .delivered
             .get("grain"),
-        30.0
+        Fx::int(30)
     );
-    assert_eq!(state.cities[&ids.city].treasury.get("grain"), 70.0);
+    assert_eq!(state.cities[&ids.city].treasury.get("grain"), Fx::int(70));
 
     // 所有者收回管理权、自己管理后，规定任务就没有了
     apply(
@@ -2075,11 +2107,11 @@ fn delivered_goods_go_to_the_owners_private_store_and_count_toward_the_quota() {
 }
 
 /// 家宰管城、规定每年上缴 40 粮，今年交了 `delivered` 粮，返回年底所有者对家宰的信任。
-fn trust_after_year(delivered: f64) -> f64 {
+fn trust_after_year(delivered: Fx) -> Fx {
     let config = config();
     let (mut state, ids) = setup(&config);
     let steward = hand_over(&mut state, &config, &ids);
-    let goods = Inventory([("grain".to_string(), 40.0)].into());
+    let goods = Inventory([("grain".to_string(), Fx::int(40))].into());
     apply(
         &mut state,
         &config,
@@ -2090,7 +2122,7 @@ fn trust_after_year(delivered: f64) -> f64 {
         },
     )
     .unwrap();
-    if delivered > 0.0 {
+    if delivered > Fx::ZERO {
         let goods = Inventory([("grain".to_string(), delivered)].into());
         apply(
             &mut state,
@@ -2119,16 +2151,19 @@ fn quota_is_settled_in_winter_and_changes_trust() {
     let config = config();
     let q = &config.quota;
     let initial = q.initial_trust;
-    assert_eq!(trust_after_year(40.0), initial + q.complete_trust);
-    assert_eq!(trust_after_year(50.0), initial + q.exceed_trust);
-    assert_eq!(trust_after_year(20.0), initial - q.fail_trust_penalty * 0.5);
-    assert_eq!(trust_after_year(0.0), initial - q.fail_trust_penalty);
+    assert_eq!(trust_after_year(Fx::int(40)), initial + q.complete_trust);
+    assert_eq!(trust_after_year(Fx::int(50)), initial + q.exceed_trust);
+    assert_eq!(
+        trust_after_year(Fx::int(20)),
+        initial - q.fail_trust_penalty * Fx::milli(500)
+    );
+    assert_eq!(trust_after_year(Fx::ZERO), initial - q.fail_trust_penalty);
 }
 
 #[test]
 fn low_taxes_and_grants_win_loyalty() {
     let config = config();
-    let loyalty = |rate: f64| {
+    let loyalty = |rate: Fx| {
         let (mut state, ids) = setup(&config);
         state.cities.get_mut(&ids.city).unwrap().tax_rate = rate;
         start(
@@ -2144,11 +2179,11 @@ fn low_taxes_and_grants_win_loyalty() {
         state.cities[&ids.city].groups[&ids.farmers].loyalty
     };
     let initial = config.loyalty.initial;
-    assert!(loyalty(0.0) > initial);
-    assert!(loyalty(0.5) < initial, "重税让人离心");
+    assert!(loyalty(Fx::ZERO) > initial);
+    assert!(loyalty(Fx::milli(500)) < initial, "重税让人离心");
 
     let (mut state, ids) = setup(&config);
-    let goods = Inventory([("grain".to_string(), 50.0)].into());
+    let goods = Inventory([("grain".to_string(), Fx::int(50))].into());
     apply(
         &mut state,
         &config,
@@ -2166,7 +2201,7 @@ fn low_taxes_and_grants_win_loyalty() {
 fn disloyal_guan_workers_strike_and_work_for_themselves() {
     let config = config();
     // 工匠改为（狩猎、军备），官营铸兵器；罢工的人按第一项技能自主狩猎。肉会被当口粮吃掉，看皮革
-    let run = |loyalty: f64| {
+    let run = |loyalty: Fx| {
         let (mut state, ids) = setup(&config);
         let city = state.cities.get_mut(&ids.city).unwrap();
         let artisans = city.groups.get_mut(&ids.artisans).unwrap();
@@ -2189,22 +2224,22 @@ fn disloyal_guan_workers_strike_and_work_for_themselves() {
             report.events.iter().any(|e| e.text.contains("罢工")),
         )
     };
-    let (loyal_weapons, loyal_hide, loyal_strike) = run(1000.0);
-    let (weapons, hide, strike) = run(0.0);
+    let (loyal_weapons, loyal_hide, loyal_strike) = run(Fx::int(1000));
+    let (weapons, hide, strike) = run(Fx::ZERO);
     assert!(!loyal_strike && strike);
-    assert_eq!(loyal_hide, 0.0);
+    assert_eq!(loyal_hide, Fx::ZERO);
     // 忠诚度为 0 时一半人罢工，回去自主民营狩猎
     assert!(
-        (weapons / loyal_weapons - config.loyalty.guan_turnout).abs() < 0.05,
+        (weapons / loyal_weapons - config.loyalty.guan_turnout).abs() < Fx::milli(50),
         "忠诚 {loyal_weapons}，不忠 {weapons}"
     );
-    assert!(hide > 0.0);
+    assert!(hide > Fx::ZERO);
 }
 
 #[test]
 fn disloyal_min_workers_do_not_strike_but_pay_less_tax_and_make_less() {
     let config = config();
-    let run = |loyalty: f64| {
+    let run = |loyalty: Fx| {
         let (mut state, ids) = setup(&config);
         state.turn = autumn(&config); // 秋收
         state
@@ -2236,12 +2271,12 @@ fn disloyal_min_workers_do_not_strike_but_pay_less_tax_and_make_less() {
         let grain = city.private_wealth.get("grain") + city.treasury.get("grain") - before;
         (city.treasury.get("grain") - before, grain, farm)
     };
-    let (loyal_tax, loyal_grain, loyal_farm) = run(1000.0);
-    let (tax, grain, farm) = run(0.0);
+    let (loyal_tax, loyal_grain, loyal_farm) = run(Fx::int(1000));
+    let (tax, grain, farm) = run(Fx::ZERO);
     assert_eq!(loyal_farm, farm, "民营不罢工");
     assert!(grain < loyal_grain, "产量下降");
     assert!(
-        tax < loyal_tax * config.loyalty.tax_share + 1e-6,
+        tax < loyal_tax * config.loyalty.tax_share + TOL,
         "税收不上来：忠诚 {loyal_tax}，不忠 {tax}"
     );
 }
@@ -2258,10 +2293,10 @@ fn spring_sowing_limits_the_autumn_harvest() {
     let city = &state.cities[&ids.city];
     assert!(city.private_wealth.get("grain") <= before, "春天不产粮");
     let sown = city.sown["grain"];
-    assert!(sown > 0.0);
+    assert!(sown > Fx::ZERO);
 
     // 秋天：播种得少，收成按比例打折
-    let harvest = |sown: Option<f64>| {
+    let harvest = |sown: Option<Fx>| {
         let (mut state, ids) = setup(&config);
         state.turn = autumn(&config);
         if let Some(sown) = sown {
@@ -2277,10 +2312,10 @@ fn spring_sowing_limits_the_autumn_harvest() {
         state.cities[&ids.city].private_wealth.get("grain") - before
     };
     let full = harvest(None);
-    assert_eq!(harvest(Some(1000.0)), full, "种得够，收成不受限");
-    let half = harvest(Some(sown / 2.0));
+    assert_eq!(harvest(Some(Fx::int(1000))), full, "种得够，收成不受限");
+    let half = harvest(Some(sown / Fx::int(2)));
     assert!(
-        half < full * 0.75,
+        half < full * Fx::milli(750),
         "春天只种了一半，秋天收不满：{half} / {full}"
     );
 }
@@ -2430,7 +2465,7 @@ fn enfeoffment_needs_acceptance_and_cannot_be_taken_back() {
             ids.player,
             &Command::SetTaxRate {
                 city: ids.city,
-                rate: 0.3
+                rate: Fx::milli(300)
             }
         ),
         Err(CommandError::NotManager(ids.city))
@@ -2507,18 +2542,18 @@ fn fiefs_pay_a_share_of_the_years_output_by_default() {
         end_turn(&mut state, &config);
     }
     let income = state.cities[&ids.city].income.get("grain");
-    assert!(income > 0.0, "秋收的税进了府库");
+    assert!(income > Fx::ZERO, "秋收的税进了府库");
     let report = end_turn(&mut state, &config);
     let paid = state.characters[&ids.player].private_store.get("grain");
     assert!(
-        (paid - income * config.fief.auto_rate).abs() < 1e-6,
+        (paid - income * config.fief.auto_rate).abs() <= TOL,
         "{paid} vs {income}"
     );
     assert!(report.events.iter().any(|e| e.text.contains("按例")));
     // 年末结算后今年的产出清零，记为去年的
     let city = &state.cities[&ids.city];
-    assert_eq!(city.income.get("grain"), 0.0);
-    assert!((city.last_income.as_ref().unwrap().get("grain") - income).abs() < 1e-9);
+    assert_eq!(city.income.get("grain"), Fx::ZERO);
+    assert!((city.last_income.as_ref().unwrap().get("grain") - income).abs() <= TOL);
 }
 
 #[test]
@@ -2528,8 +2563,8 @@ fn reasonable_tribute_left_unpaid_becomes_a_reason_for_war() {
     let vassal = enfeoff(&mut state, &config, &ids);
     // 去年府库产出 200 粮，要 40 粮不算过火（上限是 30% 即 60 粮）
     let city = state.cities.get_mut(&ids.city).unwrap();
-    city.last_income = Some(Inventory([("grain".to_string(), 200.0)].into()));
-    let goods = Inventory([("grain".to_string(), 40.0)].into());
+    city.last_income = Some(Inventory([("grain".to_string(), Fx::int(200))].into()));
+    let goods = Inventory([("grain".to_string(), Fx::int(40))].into());
     apply(
         &mut state,
         &config,
@@ -2550,7 +2585,7 @@ fn reasonable_tribute_left_unpaid_becomes_a_reason_for_war() {
         Err(CommandError::TributeNotExcessive)
     );
     // 只有封君能指定纳贡
-    let goods = Inventory([("grain".to_string(), 1.0)].into());
+    let goods = Inventory([("grain".to_string(), Fx::ONE)].into());
     assert_eq!(
         apply(
             &mut state,
@@ -2565,7 +2600,7 @@ fn reasonable_tribute_left_unpaid_becomes_a_reason_for_war() {
     );
 
     // 纳了一半，一年下来不足
-    let half = Inventory([("grain".to_string(), 20.0)].into());
+    let half = Inventory([("grain".to_string(), Fx::int(20))].into());
     apply(
         &mut state,
         &config,
@@ -2578,7 +2613,7 @@ fn reasonable_tribute_left_unpaid_becomes_a_reason_for_war() {
     .unwrap();
     assert_eq!(
         state.characters[&ids.player].private_store.get("grain"),
-        20.0
+        Fx::int(20)
     );
     for _ in 0..config.turns_per_year() {
         end_turn(&mut state, &config);
@@ -2590,7 +2625,7 @@ fn reasonable_tribute_left_unpaid_becomes_a_reason_for_war() {
     );
     // 第二年还是不纳，满两年成为征讨的理由；封地照样收不回来
     state.cities.get_mut(&ids.city).unwrap().last_income =
-        Some(Inventory([("grain".to_string(), 200.0)].into()));
+        Some(Inventory([("grain".to_string(), Fx::int(200))].into()));
     for _ in 0..config.turns_per_year() {
         end_turn(&mut state, &config);
     }
@@ -2615,9 +2650,9 @@ fn excessive_tribute_can_be_refused_and_breeds_hostility() {
     let (mut state, ids) = setup(&config);
     let vassal = enfeoff(&mut state, &config, &ids);
     state.cities.get_mut(&ids.city).unwrap().last_income =
-        Some(Inventory([("grain".to_string(), 100.0)].into()));
+        Some(Inventory([("grain".to_string(), Fx::int(100))].into()));
     // 上限 30 粮，要 90 粮：是上限的 3 倍
-    let goods = Inventory([("grain".to_string(), 90.0)].into());
+    let goods = Inventory([("grain".to_string(), Fx::int(90))].into());
     apply(
         &mut state,
         &config,
@@ -2632,7 +2667,7 @@ fn excessive_tribute_can_be_refused_and_breeds_hostility() {
     let hostility = state.cities[&ids.city].groups[&ids.farmers].hostility;
     assert_eq!(
         hostility,
-        config.fief.hostility_gain * 2.0,
+        config.fief.hostility_gain * Fx::int(2),
         "超出越多敌视越深，最多两倍"
     );
 
@@ -2654,9 +2689,9 @@ fn excessive_tribute_can_be_refused_and_breeds_hostility() {
 
     // 封君改回合理的要求，敌视慢慢消退。测试城没人收税，府库今年没有产出，按去年 100 粮算
     state.cities.get_mut(&ids.city).unwrap().last_income =
-        Some(Inventory([("grain".to_string(), 100.0)].into()));
+        Some(Inventory([("grain".to_string(), Fx::int(100))].into()));
     let before = state.cities[&ids.city].groups[&ids.farmers].hostility;
-    let goods = Inventory([("grain".to_string(), 1.0)].into());
+    let goods = Inventory([("grain".to_string(), Fx::ONE)].into());
     apply(
         &mut state,
         &config,
@@ -2680,7 +2715,7 @@ fn low_reputation_and_usurpation_are_reasons_for_war() {
     let (mut state, ids) = setup(&config);
     let vassal = enfeoff(&mut state, &config, &ids);
     assert!(fief_grievances(&state, &config, &ids).is_empty());
-    state.characters.get_mut(&vassal).unwrap().reputation = config.fief.low_reputation - 1.0;
+    state.characters.get_mut(&vassal).unwrap().reputation = config.fief.low_reputation - Fx::ONE;
     // 封臣无爵位，每城上限 7 块地；给他 9 块，僭越
     let city = state.cities.get_mut(&ids.city).unwrap();
     for pos in Hex::new(0, 0).spiral().skip(3).take(6) {
@@ -2797,7 +2832,7 @@ fn a_ruler_must_keep_one_city_of_his_own() {
     .unwrap();
 }
 
-fn goods(pairs: &[(&str, f64)]) -> Inventory {
+fn goods(pairs: &[(&str, Fx)]) -> Inventory {
     Inventory(pairs.iter().map(|(g, n)| (g.to_string(), *n)).collect())
 }
 
@@ -2830,13 +2865,13 @@ fn a_gift_takes_effect_once_accepted() {
     let (mut state, ids) = setup(&config);
     let friend = add_steward(&mut state);
     let stranger = add_steward(&mut state);
-    state.characters.get_mut(&ids.player).unwrap().private_store = goods(&[("grain", 50.0)]);
+    state.characters.get_mut(&ids.player).unwrap().private_store = goods(&[("grain", Fx::int(50))]);
     let give = zhou_core::Stake {
-        private: goods(&[("grain", 20.0)]),
+        private: goods(&[("grain", Fx::int(20))]),
         ..Default::default()
     };
     let too_much = zhou_core::Stake {
-        private: goods(&[("grain", 80.0)]),
+        private: goods(&[("grain", Fx::int(80))]),
         ..Default::default()
     };
     assert_eq!(
@@ -2876,7 +2911,7 @@ fn a_gift_takes_effect_once_accepted() {
     assert_eq!(state.deals[&deal].kind_name(), "赠与");
     assert_eq!(
         state.characters[&ids.player].private_store.get("grain"),
-        50.0,
+        Fx::int(50),
         "对方接受之前不动"
     );
     assert_eq!(
@@ -2897,9 +2932,12 @@ fn a_gift_takes_effect_once_accepted() {
     .unwrap();
     assert_eq!(
         state.characters[&ids.player].private_store.get("grain"),
-        30.0
+        Fx::int(30)
     );
-    assert_eq!(state.characters[&friend].private_store.get("grain"), 20.0);
+    assert_eq!(
+        state.characters[&friend].private_store.get("grain"),
+        Fx::int(20)
+    );
     assert!(state.deals.is_empty());
 }
 
@@ -2909,14 +2947,14 @@ fn owners_trade_from_their_cities_treasuries_without_asking_the_manager() {
     let (mut state, ids) = setup(&config);
     hand_over(&mut state, &config, &ids);
     let merchant = add_steward(&mut state);
-    state.characters.get_mut(&merchant).unwrap().private_store = goods(&[("salt", 30.0)]);
+    state.characters.get_mut(&merchant).unwrap().private_store = goods(&[("salt", Fx::int(30))]);
     // 玩家拿城里府库的青铜换商人的盐，换来的盐放进这座城的府库
     let give = zhou_core::Stake {
-        treasuries: [(ids.city, goods(&[("bronze", 10.0)]))].into(),
+        treasuries: [(ids.city, goods(&[("bronze", Fx::int(10))]))].into(),
         ..Default::default()
     };
     let take = zhou_core::Stake {
-        private: goods(&[("salt", 30.0)]),
+        private: goods(&[("salt", Fx::int(30))]),
         ..Default::default()
     };
     let deal = propose(
@@ -2938,13 +2976,16 @@ fn owners_trade_from_their_cities_treasuries_without_asking_the_manager() {
     )
     .unwrap();
     let city = &state.cities[&ids.city];
-    assert_eq!(city.treasury.get("bronze"), 40.0);
-    assert_eq!(city.treasury.get("salt"), 130.0);
+    assert_eq!(city.treasury.get("bronze"), Fx::int(40));
+    assert_eq!(city.treasury.get("salt"), Fx::int(130));
     assert_eq!(
         state.characters[&merchant].private_store.get("bronze"),
-        10.0
+        Fx::int(10)
     );
-    assert_eq!(state.characters[&merchant].private_store.get("salt"), 0.0);
+    assert_eq!(
+        state.characters[&merchant].private_store.get("salt"),
+        Fx::ZERO
+    );
 }
 
 #[test]
@@ -2952,10 +2993,10 @@ fn a_deal_is_checked_again_when_accepted() {
     let config = config();
     let (mut state, ids) = setup(&config);
     let lord = add_steward(&mut state);
-    state.characters.get_mut(&lord).unwrap().private_store = goods(&[("grain", 10.0)]);
+    state.characters.get_mut(&lord).unwrap().private_store = goods(&[("grain", Fx::int(10))]);
     // 玩家索取别人的粮；对方答复前已经把粮送光了
     let take = zhou_core::Stake {
-        private: goods(&[("grain", 10.0)]),
+        private: goods(&[("grain", Fx::int(10))]),
         ..Default::default()
     };
     let deal = propose(
@@ -2988,9 +3029,9 @@ fn deals_left_unanswered_expire_at_the_end_of_the_turn() {
     let config = config();
     let (mut state, ids) = setup(&config);
     let friend = add_steward(&mut state);
-    state.characters.get_mut(&ids.player).unwrap().private_store = goods(&[("grain", 10.0)]);
+    state.characters.get_mut(&ids.player).unwrap().private_store = goods(&[("grain", Fx::int(10))]);
     let give = zhou_core::Stake {
-        private: goods(&[("grain", 10.0)]),
+        private: goods(&[("grain", Fx::int(10))]),
         ..Default::default()
     };
     let deal = propose(
@@ -3022,7 +3063,7 @@ fn deals_left_unanswered_expire_at_the_end_of_the_turn() {
     );
     assert_eq!(
         state.characters[&ids.player].private_store.get("grain"),
-        10.0
+        Fx::int(10)
     );
 }
 
@@ -3088,13 +3129,13 @@ fn whole_cities_can_change_hands_but_fiefs_cannot() {
     let (mut state, ids) = setup(&config);
     let buyer = add_steward(&mut state);
     add_country(&mut state, "郑", buyer);
-    state.characters.get_mut(&buyer).unwrap().private_store = goods(&[("bronze", 100.0)]);
+    state.characters.get_mut(&buyer).unwrap().private_store = goods(&[("bronze", Fx::int(100))]);
     let give = zhou_core::Stake {
         cities: vec![ids.city],
         ..Default::default()
     };
     let take = zhou_core::Stake {
-        private: goods(&[("bronze", 100.0)]),
+        private: goods(&[("bronze", Fx::int(100))]),
         ..Default::default()
     };
     let deal = propose(
@@ -3123,7 +3164,7 @@ fn whole_cities_can_change_hands_but_fiefs_cannot() {
     assert_eq!(state.country_of(city), state.characters[&buyer].nationality);
     assert_eq!(
         state.characters[&ids.player].private_store.get("bronze"),
-        100.0
+        Fx::int(100)
     );
 
     // 都城不能易手
@@ -3189,25 +3230,25 @@ fn cities_of_one_owner_close_together_produce_more() {
     let (mut state, ids) = setup(&config);
     let seat = state.cities[&ids.city].seat;
     let mult = |state: &GameState| state.neighbor_mult(&config, &state.cities[&ids.city]);
-    assert_eq!(mult(&state), 1.0);
+    assert_eq!(mult(&state), Fx::ONE);
     // 别人的城、离得太远的城都不算
     let other = add_steward(&mut state);
     copy_city(&mut state, &ids, other, seat);
     let far = Hex::new(seat.q - config.neighbor.range as i32 - 1, seat.r);
     copy_city(&mut state, &ids, ids.player, far);
-    assert_eq!(mult(&state), 1.0);
+    assert_eq!(mult(&state), Fx::ONE);
     // 8 格之内的每座自己的城加 5%，最多 15%
     let near = Hex::new(seat.q + config.neighbor.range as i32, seat.r);
     let first = copy_city(&mut state, &ids, ids.player, near);
-    assert!((mult(&state) - 1.05).abs() < 1e-9);
+    assert!((mult(&state) - Fx::milli(1050)).abs() <= TOL);
     assert!(
-        (state.neighbor_mult(&config, &state.cities[&first]) - 1.05).abs() < 1e-9,
+        (state.neighbor_mult(&config, &state.cities[&first]) - Fx::milli(1050)).abs() <= TOL,
         "两座城都有增益"
     );
     for _ in 0..3 {
         copy_city(&mut state, &ids, ids.player, near);
     }
-    assert!((mult(&state) - 1.15).abs() < 1e-9);
+    assert!((mult(&state) - Fx::milli(1150)).abs() <= TOL);
 
     // 增益加在产出上：同样的官营种粮，有邻城的多收 5%
     let harvest = |mine: bool| {
@@ -3234,9 +3275,9 @@ fn cities_of_one_owner_close_together_produce_more() {
     };
     let alone = harvest(false);
     let together = harvest(true);
-    assert!(alone > 0.0);
+    assert!(alone > Fx::ZERO);
     assert!(
-        (together / alone - 1.05).abs() < 1e-6,
+        (together / alone - Fx::milli(1050)).abs() <= TOL,
         "{together} / {alone}"
     );
 }
@@ -3387,7 +3428,7 @@ fn armies_pass_a_city_only_with_the_owners_permission() {
     assert!(!state.can_pass(steward, seat, false));
 
     // 通行权在交易里给：邻人拿青铜换 6 回合（默认期限）的通行权
-    state.characters.get_mut(&neighbor).unwrap().private_store = goods(&[("bronze", 10.0)]);
+    state.characters.get_mut(&neighbor).unwrap().private_store = goods(&[("bronze", Fx::int(10))]);
     let passage = |turns: Option<u32>| zhou_core::Stake {
         passage: vec![zhou_core::Passage {
             city: ids.city,
@@ -3396,7 +3437,7 @@ fn armies_pass_a_city_only_with_the_owners_permission() {
         ..Default::default()
     };
     let pay = zhou_core::Stake {
-        private: goods(&[("bronze", 10.0)]),
+        private: goods(&[("bronze", Fx::int(10))]),
         ..Default::default()
     };
     let deal = propose(
@@ -3535,8 +3576,8 @@ fn owners_raise_armies_from_martial_people_and_disband_them_at_home() {
         .unwrap()
         .skills
         .push("martial".into());
-    city.treasury.add("weapon", 42.0);
-    city.treasury.add("armor", 10.0);
+    city.treasury.add("weapon", Fx::int(42));
+    city.treasury.add("armor", Fx::int(10));
     let grain = Task::Produce {
         recipe: "grain".into(),
         mode: Mode::Min,
@@ -3553,7 +3594,7 @@ fn owners_raise_armies_from_martial_people_and_disband_them_at_home() {
     let other = state.alloc_id();
     state
         .characters
-        .insert(other, Character::new(other, "旁人", "none", 0.0));
+        .insert(other, Character::new(other, "旁人", "none", Fx::ZERO));
 
     let raise = |squads| Command::RaiseArmy {
         city: ids.city,
@@ -3618,15 +3659,15 @@ fn owners_raise_armies_from_martial_people_and_disband_them_at_home() {
     let city = &state.cities[&ids.city];
     assert_eq!(city.groups[&ids.farmers].size, 30);
     assert_eq!(city.assignments[&work].workers[&ids.farmers], 30);
-    assert_eq!(city.treasury.get("weapon"), 0.0);
-    assert_eq!(city.treasury.get("armor"), 0.0);
+    assert_eq!(city.treasury.get("weapon"), Fx::ZERO);
+    assert_eq!(city.treasury.get("armor"), Fx::ZERO);
     let a = &state.armies[&army];
     assert_eq!((a.commander, a.pos, a.size()), (ids.player, city.seat, 70));
     // 兵器只够 42 人：装备齐备 60%，战斗力打 0.6 + 0.4 × 0.5 = 0.8
     let s = &a.squads[0];
-    assert!((s.equipped(&config) - 0.6).abs() < 1e-9);
-    assert!((s.gear_mult(&config) - 0.8).abs() < 1e-9);
-    assert_eq!(s.gear.get("armor"), 10.0);
+    assert!((s.equipped(&config) - Fx::milli(600)).abs() <= TOL);
+    assert!((s.gear_mult(&config) - Fx::milli(800)).abs() <= TOL);
+    assert_eq!(s.gear.get("armor"), Fx::int(10));
 
     // 别人不能遣散；离开自己的城不能遣散
     let disband = Command::DisbandArmy { army };
@@ -3648,8 +3689,8 @@ fn owners_raise_armies_from_martial_people_and_disband_them_at_home() {
     assert!(state.armies.is_empty());
     assert_eq!(city.groups[&ids.farmers].size, 100);
     assert_eq!(city.assignments[&work].workers[&ids.farmers], 40);
-    assert_eq!(city.treasury.get("weapon"), 42.0);
-    assert_eq!(city.treasury.get("armor"), 10.0);
+    assert_eq!(city.treasury.get("weapon"), Fx::int(42));
+    assert_eq!(city.treasury.get("armor"), Fx::int(10));
 }
 
 #[test]
@@ -3657,8 +3698,8 @@ fn elite_troops_eat_from_the_treasury_and_armies_follow_their_city() {
     let config = config();
     let (mut state, ids) = setup(&config);
     let city = state.cities.get_mut(&ids.city).unwrap();
-    city.private_wealth.add("grain", 1000.0);
-    city.private_wealth.add("salt", 1000.0);
+    city.private_wealth.add("grain", Fx::int(1000));
+    city.private_wealth.add("salt", Fx::int(1000));
     let mut elite = state.clone();
     elite
         .cities
@@ -3673,9 +3714,9 @@ fn elite_troops_eat_from_the_treasury_and_armies_follow_their_city() {
     end_turn(&mut state, &config);
     end_turn(&mut elite, &config);
     // 20 名精兵每回合的口粮由府库出
-    let food = 20.0 * config.population.consumption[0].amount / config.population.per_people;
+    let food = Fx::int(20) * config.population.consumption[0].amount / config.population.per_people;
     let diff = (before - treasury_grain(&elite)) - (before - treasury_grain(&state));
-    assert!((diff - food).abs() < 1e-6, "{diff} vs {food}");
+    assert!((diff - food).abs() <= TOL, "{diff} vs {food}");
 
     // 精兵编成军队后照样吃府库；城整座送人，军队跟着归新主人统领
     let army = apply(
@@ -3691,7 +3732,7 @@ fn elite_troops_eat_from_the_treasury_and_armies_follow_their_city() {
     let other = elite.alloc_id();
     elite
         .characters
-        .insert(other, Character::new(other, "旁人", "none", 0.0));
+        .insert(other, Character::new(other, "旁人", "none", Fx::ZERO));
     let give = zhou_core::Stake {
         cities: vec![ids.city],
         ..Default::default()
@@ -3802,7 +3843,7 @@ fn armies_march_to_a_destination_over_several_turns() {
     let other = state.alloc_id();
     state
         .characters
-        .insert(other, Character::new(other, "旁人", "none", 0.0));
+        .insert(other, Character::new(other, "旁人", "none", Fx::ZERO));
     assert_eq!(
         apply(&mut state, &config, other, &march(Hex::new(0, 0))),
         Err(CommandError::NotCommander(army))
@@ -3878,7 +3919,7 @@ fn marches_go_around_cities_without_passage_and_other_armies() {
     let other = state.alloc_id();
     state
         .characters
-        .insert(other, Character::new(other, "旁人", "none", 0.0));
+        .insert(other, Character::new(other, "旁人", "none", Fx::ZERO));
     // 走廊中间的 (3,0) 是别人的城
     let city = copy_city(&mut state, &ids, other, Hex::new(3, 0));
     let c = state.cities.get_mut(&city).unwrap();
@@ -3935,8 +3976,8 @@ fn war_on_corridor(config: &Config) -> (GameState, Ids, Id, Id) {
         .unwrap()
         .skills
         .push("martial".into());
-    city.treasury.add("weapon", 100.0);
-    city.treasury.add("siege_engine", 10.0);
+    city.treasury.add("weapon", Fx::int(100));
+    city.treasury.add("siege_engine", Fx::int(10));
     let army = apply(
         &mut state,
         config,
@@ -3950,7 +3991,7 @@ fn war_on_corridor(config: &Config) -> (GameState, Ids, Id, Id) {
     let other = state.alloc_id();
     state
         .characters
-        .insert(other, Character::new(other, "敌人", "none", 0.0));
+        .insert(other, Character::new(other, "敌人", "none", Fx::ZERO));
     state.set_war(ids.player, other, true);
     (state, ids, army, other)
 }
@@ -3964,7 +4005,7 @@ fn enemy_army(state: &mut GameState, template: Id, commander: Id, pos: Hex, coun
     a.dest = None;
     let s = &mut a.squads[0];
     s.gear = Inventory::default();
-    s.gear.add("weapon", count as f64);
+    s.gear.add("weapon", Fx::from(count));
     s.count = count;
     state.armies.insert(a.id, a.clone());
     a.id
@@ -4028,7 +4069,10 @@ fn armies_fight_like_civilization() {
     .unwrap();
     assert_eq!(state.armies[&army].size(), 47);
     assert_eq!(state.armies[&enemy].size(), 25);
-    assert_eq!(state.armies[&enemy].squads[0].gear.get("weapon"), 25.0);
+    assert_eq!(
+        state.armies[&enemy].squads[0].gear.get("weapon"),
+        Fx::int(25)
+    );
     // 每回合只能攻击一次，攻击后不能再走
     assert_eq!(state.armies[&army].moves_left, 0);
     assert_eq!(
@@ -4050,7 +4094,7 @@ fn armies_fight_like_civilization() {
     // 远程：带弓矢的步兵隔一格射击，对方不能还手；守在山林里防御更高，但远程不看防御
     state.armies.get_mut(&army).unwrap().squads[0]
         .gear
-        .add("bow", 47.0);
+        .add("bow", Fx::int(47));
     state.armies.get_mut(&army).unwrap().pos = Hex::new(0, 0);
     state.map.insert(Hex::new(2, 0), "forest");
     apply(
@@ -4154,7 +4198,7 @@ fn cities_fall_after_the_wall_and_the_center_are_broken() {
         &attack(Hex::new(5, 0), true),
     )
     .unwrap();
-    assert_eq!(state.cities[&city].wall_damage, 5.0);
+    assert_eq!(state.cities[&city].wall_damage, Fx::int(5));
     assert_eq!(state.armies[&army].size(), 50);
     assert_eq!(state.armies[&garrison].size(), 20);
     // 墙还立着，墙里的军队打不到，城中心也打不到
@@ -4163,7 +4207,7 @@ fn cities_fall_after_the_wall_and_the_center_are_broken() {
         report
             .cities
             .iter()
-            .any(|c| c.id == city && c.wall == Some(195.0))
+            .any(|c| c.id == city && c.wall == Some(Fx::int(195)))
     );
 
     // 近战打城墙，墙上守军还手：20 人 × 防御 1 × 城墙加成 2 × 0.1 = 杀 4 人
@@ -4207,7 +4251,7 @@ fn cities_fall_after_the_wall_and_the_center_are_broken() {
     state.cities.get_mut(&city).unwrap().assignments.clear();
 
     // 城墙被攻破：墙上的守军随之覆灭
-    state.cities.get_mut(&city).unwrap().wall_damage = 199.9;
+    state.cities.get_mut(&city).unwrap().wall_damage = Fx::milli(199900);
     apply(
         &mut state,
         &config,
@@ -4236,8 +4280,8 @@ fn cities_fall_after_the_wall_and_the_center_are_broken() {
         &attack(Hex::new(5, 0), false),
     )
     .unwrap();
-    assert!((state.cities[&city].center_damage - 4.2).abs() < 1e-9);
-    state.cities.get_mut(&city).unwrap().center_damage = 19.0;
+    assert!((state.cities[&city].center_damage - Fx::milli(4200)).abs() <= TOL);
+    state.cities.get_mut(&city).unwrap().center_damage = Fx::int(19);
     end_turn_fed(&mut state, &config);
     apply(
         &mut state,
@@ -4288,14 +4332,18 @@ fn cities_fall_after_the_wall_and_the_center_are_broken() {
     assert_eq!(state.characters[&steward].name, "士乙");
     assert!(!state.cities[&ids.city].officials.contains_key(&ids.shi_b));
     // 接管的人风评 0：城中人群对他的忠诚度从 300 起
-    assert!(c.groups.values().all(|g| (g.loyalty - 300.0).abs() < 1e-9));
+    assert!(
+        c.groups
+            .values()
+            .all(|g| (g.loyalty - Fx::int(300)).abs() <= TOL)
+    );
 
     // 劫掠：按物品类别挑着抢，不挑就全拿；每座城每回合只能劫掠一次
     let c = state.cities.get_mut(&city).unwrap();
-    c.treasury.add("weapon", 10.0);
+    c.treasury.add("weapon", Fx::int(10));
     c.private_wealth = Inventory::default();
-    c.private_wealth.add("coin", 50.0);
-    c.private_wealth.add("grain", 50.0);
+    c.private_wealth.add("coin", Fx::int(50));
+    c.private_wealth.add("grain", Fx::int(50));
     let treasury = state.cities[&city].treasury.clone();
     let plunder = |target, categories: &[&str]| Command::Plunder {
         city,
@@ -4327,7 +4375,7 @@ fn cities_fall_after_the_wall_and_the_center_are_broken() {
     assert_eq!(me.private_store.get("grain"), treasury.get("grain"));
     assert_eq!(me.private_store.get("weapon"), treasury.get("weapon"));
     let c = &state.cities[&city];
-    assert_eq!(c.treasury.get("grain"), 0.0);
+    assert_eq!(c.treasury.get("grain"), Fx::ZERO);
     assert_eq!(c.treasury.get("bronze"), treasury.get("bronze"));
     assert_eq!(
         apply(&mut state, &config, ids.player, &plunder(Citizens, &[])),
@@ -4343,11 +4391,15 @@ fn cities_fall_after_the_wall_and_the_center_are_broken() {
     )
     .unwrap();
     let me = &state.characters[&ids.player];
-    assert_eq!(me.private_store.get("coin"), 50.0);
-    assert_eq!(me.reputation, -5.0);
+    assert_eq!(me.private_store.get("coin"), Fx::int(50));
+    assert_eq!(me.reputation, -Fx::int(5));
     let c = &state.cities[&city];
-    assert_eq!(c.private_wealth.get("grain"), 50.0);
-    assert!(c.groups.values().all(|g| (g.loyalty - 150.0).abs() < 1e-9));
+    assert_eq!(c.private_wealth.get("grain"), Fx::int(50));
+    assert!(
+        c.groups
+            .values()
+            .all(|g| (g.loyalty - Fx::int(150)).abs() <= TOL)
+    );
     // 毁掉城墙
     let tile = *c.tiles.keys().next().unwrap();
     apply(
@@ -4454,7 +4506,7 @@ fn only_rulers_declare_war_on_countries_and_unjustified_wars_cost_reputation() {
 
     // 国君对别国宣战：没有理由扣 20 风评；两国的人都卷进来，国内的城对本国的人开放
     let war = apply(&mut state, &config, wei_bo, &declare(person(king))).unwrap()[0];
-    assert_eq!(state.characters[&wei_bo].reputation, 280.0);
+    assert_eq!(state.characters[&wei_bo].reputation, Fx::int(280));
     assert!(state.at_war(player, king));
     assert!(!state.at_war(player, wei_bo));
     assert!(state.countries[&zhou].national_war && state.countries[&wei].national_war);
@@ -4465,12 +4517,13 @@ fn only_rulers_declare_war_on_countries_and_unjustified_wars_cost_reputation() {
 
     // 无国籍的人打某国的人，就是和这个国家开战，不用理由
     let drifter = state.alloc_id();
-    state
-        .characters
-        .insert(drifter, Character::new(drifter, "游士", "none", 50.0));
+    state.characters.insert(
+        drifter,
+        Character::new(drifter, "游士", "none", Fx::int(50)),
+    );
     apply(&mut state, &config, drifter, &declare(person(player))).unwrap();
     assert!(state.at_war(drifter, wei_bo));
-    assert_eq!(state.characters[&drifter].reputation, 50.0);
+    assert_eq!(state.characters[&drifter].reputation, Fx::int(50));
 
     // 讲和：周王投降，交出私库里的钱；卫伯接受，战争结束，12 回合内不能再开战
     state
@@ -4478,9 +4531,9 @@ fn only_rulers_declare_war_on_countries_and_unjustified_wars_cost_reputation() {
         .get_mut(&king)
         .unwrap()
         .private_store
-        .add("coin", 100.0);
+        .add("coin", Fx::int(100));
     let give = zhou_core::Stake {
-        private: Inventory(BTreeMap::from([("coin".into(), 100.0)])),
+        private: Inventory(BTreeMap::from([("coin".into(), Fx::int(100))])),
         ..Default::default()
     };
     assert_eq!(
@@ -4509,7 +4562,10 @@ fn only_rulers_declare_war_on_countries_and_unjustified_wars_cost_reputation() {
     .unwrap();
     apply(&mut state, &config, wei_bo, &Command::AcceptPeace { war }).unwrap();
     assert!(!state.at_war(player, king));
-    assert_eq!(state.characters[&wei_bo].private_store.get("coin"), 100.0);
+    assert_eq!(
+        state.characters[&wei_bo].private_store.get("coin"),
+        Fx::int(100)
+    );
     assert!(!state.countries[&zhou].national_war);
     assert_eq!(
         apply(&mut state, &config, wei_bo, &declare(country(zhou))),
@@ -4537,7 +4593,7 @@ fn rulers_halt_feuds_and_hand_out_tasks_and_disobedience_becomes_a_grievance() {
 
     // 同一国的封臣之间可以开打，但要理由
     let feud = apply(&mut state, &config, player, &declare(person(steward))).unwrap()[0];
-    assert_eq!(state.characters[&player].reputation, 480.0);
+    assert_eq!(state.characters[&player].reputation, Fx::int(480));
     assert!(state.at_war(player, steward) && !state.at_war(player, wei_bo));
     // 只有国君能制止
     assert_eq!(
@@ -4591,7 +4647,7 @@ fn rulers_halt_feuds_and_hand_out_tasks_and_disobedience_becomes_a_grievance() {
     )
     .unwrap();
     assert!(state.armies[&rival].size() < 10);
-    assert_eq!(state.characters[&player].reputation, 470.0);
+    assert_eq!(state.characters[&player].reputation, Fx::int(470));
     let reasons = zhou_core::war::reasons(&state, &config, wei_bo, person(player));
     assert!(
         reasons.contains(&zhou_core::fief::Grievance::Defiance),
@@ -4599,7 +4655,7 @@ fn rulers_halt_feuds_and_hand_out_tasks_and_disobedience_becomes_a_grievance() {
     );
     // 有了理由，国君征讨封臣不扣风评；征讨封臣也是国战，其他封臣站在国君一边
     let punish = apply(&mut state, &config, wei_bo, &declare(person(player))).unwrap()[0];
-    assert_eq!(state.characters[&wei_bo].reputation, 300.0);
+    assert_eq!(state.characters[&wei_bo].reputation, Fx::int(300));
     assert!(state.at_war(steward, player) && state.at_war(wei_bo, player));
     assert!(!state.at_war(steward, wei_bo));
     apply(
@@ -4697,7 +4753,7 @@ fn forcing_through_a_city_declares_war_and_peace_returns_or_cedes_occupied_citie
     end_turn(&mut state, &config);
     assert!(state.at_war(ids.player, other));
     assert_eq!(state.city_at(state.armies[&army].pos), Some(city));
-    assert_eq!(state.characters[&ids.player].reputation, 0.0);
+    assert_eq!(state.characters[&ids.player].reputation, Fx::ZERO);
 
     // 讲和：割让的城归攻占者，不再算被攻占；没割让的还给原主
     let kept = enemy_city(&mut state, &ids, other, Hex::new(9, 0));
@@ -4764,7 +4820,7 @@ fn campaigning_armies_live_on_supply_lines_and_starve_without_them() {
         .get_mut(&ids.city)
         .unwrap()
         .treasury
-        .add("grain", 500.0);
+        .add("grain", Fx::int(500));
     let farmers = |s: &GameState| s.cities[&ids.city].groups[&ids.farmers].size;
     let power = state.armies[&army].attack(&config);
 
@@ -4783,7 +4839,7 @@ fn campaigning_armies_live_on_supply_lines_and_starve_without_them() {
     );
     assert!(report.armies[0].on_campaign);
     assert_eq!(state.armies[&army].hunger, 1);
-    assert!((state.armies[&army].attack(&config) - power * 0.9).abs() < 1e-9);
+    assert!((state.armies[&army].attack(&config) - power * Fx::milli(900)).abs() <= TOL);
 
     // 开粮道：从城里抽 2 名辎重兵，撤掉就回来
     let open = Command::OpenSupplyLine {
@@ -4811,7 +4867,7 @@ fn campaigning_armies_live_on_supply_lines_and_starve_without_them() {
     // 供上粮，战斗力直接回满；粮从起点城的府库出，粮道越长耗得越多
     let report = end_turn(&mut state, &config);
     assert_eq!(state.armies[&army].hunger, 0);
-    assert!((state.armies[&army].attack(&config) - power).abs() < 1e-9);
+    assert!((state.armies[&army].attack(&config) - power).abs() <= TOL);
     let line = report.armies[0].supply.as_ref().unwrap();
     assert_eq!(line.convoy, 2);
     assert_eq!(line.path.last(), Some(&Hex::new(5, 0)));
@@ -4831,7 +4887,7 @@ fn campaigning_armies_live_on_supply_lines_and_starve_without_them() {
     let other = state.alloc_id();
     state
         .characters
-        .insert(other, Character::new(other, "敌人", "none", 0.0));
+        .insert(other, Character::new(other, "敌人", "none", Fx::ZERO));
     state.set_war(ids.player, other, true);
     let raider = enemy_army(&mut state, army, other, Hex::new(3, -1), 10);
     let size = farmers(&state);
@@ -4854,9 +4910,9 @@ fn campaigning_armies_live_on_supply_lines_and_starve_without_them() {
 
     // 断得越久降得越快：90%、70%、40%，第 4 回合溃散
     end_turn(&mut state, &config);
-    assert!((state.armies[&army].fed_mult(&config) - 0.7).abs() < 1e-9);
+    assert!((state.armies[&army].fed_mult(&config) - Fx::milli(700)).abs() <= TOL);
     end_turn(&mut state, &config);
-    assert!((state.armies[&army].fed_mult(&config) - 0.4).abs() < 1e-9);
+    assert!((state.armies[&army].fed_mult(&config) - Fx::milli(400)).abs() <= TOL);
     let report = end_turn(&mut state, &config);
     assert!(!state.armies.contains_key(&army));
     assert!(report.events.iter().any(|e| e.text.contains("就地溃散")));

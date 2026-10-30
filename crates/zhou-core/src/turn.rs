@@ -10,6 +10,7 @@
 //! 9. 礼法检查：列鼎制度、城市面积
 //! 10. 年末（冬季最后一个月）结算规定任务
 
+use crate::fx::Fx;
 use std::collections::BTreeMap;
 
 use serde::Serialize;
@@ -55,7 +56,7 @@ pub struct ArmyReport {
     /// 连续断粮的回合数
     pub hunger: u32,
     /// 断粮后战斗力剩下的比例，1 为没有断粮
-    pub strength: f64,
+    pub strength: Fx,
     pub squads: Vec<SquadReport>,
 }
 
@@ -77,7 +78,7 @@ pub struct SquadReport {
     pub elite: bool,
     pub gear: Inventory,
     /// 必需装备的齐备程度，0 到 1
-    pub equipped: f64,
+    pub equipped: Fx,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -112,10 +113,10 @@ pub struct CityReport {
     /// 通行权：人物 id → 之后还剩几回合
     pub passage: BTreeMap<Id, u32>,
     /// 邻城增益：产出增加的比例
-    pub neighbor_bonus: f64,
+    pub neighbor_bonus: Fx,
     /// 城墙还剩的防御值，没有城墙为 None；城中心还剩的防御值
-    pub wall: Option<f64>,
-    pub center: f64,
+    pub wall: Option<Fx>,
+    pub center: Fx,
     pub occupied: bool,
     /// 攻占这座城的人
     pub occupier: Option<Id>,
@@ -131,7 +132,10 @@ pub struct CityReport {
     pub buildings: BTreeMap<String, u32>,
     pub tiles: Vec<TileReport>,
     pub jobs: Vec<JobReport>,
-    pub officials: u32,
+    /// 税率（千分之一为单位）
+    pub tax_rate: Fx,
+    /// 士人名单
+    pub officials: Vec<OfficialReport>,
     pub idle_officials: u32,
     pub groups: Vec<GroupReport>,
     pub assignments: Vec<AssignmentReport>,
@@ -158,12 +162,29 @@ pub struct JobReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct OfficialReport {
+    pub id: Id,
+    pub name: String,
+    pub skills: Vec<String>,
+    pub loyalty: Fx,
+    pub service_turns: u32,
+    /// 能管理的人数，含建筑加成
+    pub capacity: u32,
+    /// 正在主事的工事，闲着为 None
+    pub assignment: Option<Id>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AssignmentReport {
     pub id: Id,
+    /// 主事的士人的名字
     pub shi: String,
+    pub shi_id: Id,
+    /// 人群 id → 人数
+    pub groups: BTreeMap<Id, u32>,
     pub task: Task,
     pub workers: u32,
-    pub progress: f64,
+    pub progress: Fx,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -173,11 +194,11 @@ pub struct GroupReport {
     pub size: u32,
     pub skills: Vec<String>,
     pub managed: u32,
-    pub happiness: f64,
-    pub culture: f64,
-    pub loyalty: f64,
+    pub happiness: Fx,
+    pub culture: Fx,
+    pub loyalty: Fx,
     /// 对封君的敌视
-    pub hostility: f64,
+    pub hostility: Fx,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,10 +206,10 @@ pub struct CharacterReport {
     pub id: Id,
     pub name: String,
     pub rank: String,
-    pub reputation: f64,
+    pub reputation: Fx,
     pub private_store: Inventory,
     /// 人物 id → 对他的信任
-    pub trust: BTreeMap<Id, f64>,
+    pub trust: BTreeMap<Id, Fx>,
     pub nationality: Option<Id>,
     /// 所在的城市
     pub location: Option<Id>,
@@ -203,7 +224,7 @@ struct Ledger {
     guan_labor: u32,
     taxed: u32,
     /// 消耗缺口比例，0 表示吃饱
-    unfed: f64,
+    unfed: Fx,
 }
 
 /// 本回合各容量来源剩余的劳作位置。
@@ -235,16 +256,16 @@ impl Jobs {
     }
 
     /// 为 `workers` 人占用这种经营方式能用的劳作位置，返回折算产量倍率后的有效人数。
-    fn take(&mut self, config: &Config, recipe: &str, workers: u32, mode: Mode) -> f64 {
+    fn take(&mut self, config: &Config, recipe: &str, workers: u32, mode: Mode) -> Fx {
         let Some(pool) = config.pool_of(recipe) else {
-            return workers as f64;
+            return Fx::from(workers);
         };
         let slots = self
             .slots
             .get_mut(&pool)
             .expect("pool built for every recipe");
         let mut left = workers;
-        let mut effective = 0.0;
+        let mut effective = Fx::ZERO;
         for slot in slots
             .iter_mut()
             .filter(|s| s.mode.is_none_or(|m| m == mode))
@@ -252,7 +273,7 @@ impl Jobs {
             let n = left.min(slot.count);
             slot.count -= n;
             left -= n;
-            effective += n as f64 * slot.mult;
+            effective += Fx::from(n) * slot.mult;
         }
         if left > 0 {
             *self.turned_away.entry(pool).or_insert(0) += left;
@@ -291,7 +312,7 @@ pub fn end_turn(state: &mut GameState, config: &Config) -> TurnReport {
         month,
         first_month: state.turn.is_multiple_of(config.months_per_season),
     };
-    let neighbor: BTreeMap<Id, f64> = state
+    let neighbor: BTreeMap<Id, Fx> = state
         .cities
         .values()
         .map(|c| (c.id, state.neighbor_mult(config, c)))
@@ -436,7 +457,7 @@ fn build_report(
 #[derive(Clone, Copy)]
 struct Outside {
     /// 邻城增益的产出倍数
-    neighbor: f64,
+    neighbor: Fx,
     /// 这座城要供养的军中人数：(脱产精兵, 征发来的兵)
     soldiers: (u32, u32),
 }
@@ -495,9 +516,9 @@ fn resolve_city(
             let turnout = if guan {
                 config.disloyalty_mult(city.groups[group].loyalty, config.loyalty.guan_turnout)
             } else {
-                1.0
+                Fx::ONE
             };
-            let n = (*count as f64 * turnout).floor() as u32;
+            let n = (turnout * *count).floor_u32();
             working.insert((a.id, *group), n);
             *strikers.entry(*group).or_insert(0) += count - n;
         }
@@ -514,7 +535,7 @@ fn resolve_city(
         }
     }
     // 先排好每一份劳作占到的位置，播种和收成要看全城干这一行的总人数
-    let mut batches: Vec<(&String, Id, u32, f64, Mode)> = Vec::new();
+    let mut batches: Vec<(&String, Id, u32, Fx, Mode)> = Vec::new();
     for a in &assignments {
         if let Task::Produce { recipe, mode } = &a.task {
             for group in a.workers.keys() {
@@ -541,18 +562,18 @@ fn resolve_city(
         }
     }
     // 播种季记下种了多少；其他季节收成不超过播种量，多出来的人白忙
-    let mut harvest: BTreeMap<&String, f64> = BTreeMap::new();
+    let mut harvest: BTreeMap<&String, Fx> = BTreeMap::new();
     for (recipe, def) in &config.recipes {
         let Some(sowing) = def.sowing_season else {
             continue;
         };
-        let total: f64 = batches.iter().filter(|b| b.0 == recipe).map(|b| b.3).sum();
+        let total: Fx = batches.iter().filter(|b| b.0 == recipe).map(|b| b.3).sum();
         if season == sowing {
             if first_month {
-                city.sown.insert(recipe.clone(), 0.0);
+                city.sown.insert(recipe.clone(), Fx::ZERO);
             }
-            *city.sown.entry(recipe.clone()).or_insert(0.0) +=
-                total / config.months_per_season as f64;
+            *city.sown.entry(recipe.clone()).or_insert(Fx::ZERO) +=
+                total / config.months_per_season;
         } else if let Some(sown) = city.sown.get(recipe)
             && total > *sown
         {
@@ -561,7 +582,7 @@ fn resolve_city(
     }
     for (recipe, group, count, effective, mode) in batches {
         let def = &config.recipes[recipe];
-        let effective = effective * harvest.get(recipe).copied().unwrap_or(1.0);
+        let effective = effective * harvest.get(recipe).copied().unwrap_or(Fx::ONE);
         // 邻城增益只加在产出上，不加在营建、开垦的进度上
         produce(
             city,
@@ -594,12 +615,11 @@ fn resolve_city(
     // 2. 营建、改良地块、开垦：都按投入的人力累积进度，视为官营。修城墙直接回城墙的防御值
     for a in &assignments {
         if a.task == Task::RepairWall {
-            let mut repaired = 0.0;
+            let mut repaired = Fx::ZERO;
             for group in a.workers.keys() {
                 let count = working[&(a.id, *group)];
                 let happiness = config.happiness_output_mult(city.groups[group].happiness);
-                repaired +=
-                    count as f64 / 100.0 * config.siege.repair_per_100 * happiness * city_mult;
+                repaired += config.siege.repair_per_100 * count / 100 * happiness * city_mult;
                 ledgers.get_mut(group).expect("ledger per group").guan_labor += count;
             }
             if city.wall_attacked {
@@ -609,8 +629,8 @@ fn resolve_city(
                 );
                 continue;
             }
-            city.wall_damage = (city.wall_damage - repaired).max(0.0);
-            if city.wall_damage <= 0.0 {
+            city.wall_damage = (city.wall_damage - repaired).max(Fx::ZERO);
+            if city.wall_damage <= Fx::ZERO {
                 city.assignments.remove(&a.id);
                 events.push(
                     Event::new(format!("{}：城墙修好了", city.name)).to(insiders.iter().copied()),
@@ -633,11 +653,11 @@ fn resolve_city(
             }
             _ => continue,
         };
-        let mut progress = 0.0;
+        let mut progress = Fx::ZERO;
         for group in a.workers.keys() {
             let count = working[&(a.id, *group)];
             let happiness = config.happiness_output_mult(city.groups[group].happiness);
-            progress += count as f64 * season_mult[season] * happiness * city_mult;
+            progress += Fx::from(count) * season_mult[season] * happiness * city_mult;
             ledgers.get_mut(group).expect("ledger per group").guan_labor += count;
         }
         let assignment = city.assignments.get_mut(&a.id).expect("assignment exists");
@@ -730,7 +750,7 @@ fn resolve_city(
             // 民众对管理者不够忠诚时，税收不上来
             let loyalty =
                 config.disloyalty_mult(city.groups[group_id].loyalty, config.loyalty.tax_share);
-            let share = (*count as f64 / size as f64).min(1.0) * loyalty;
+            let share = Fx::ratio(*count as i64, size as i64).min(Fx::ONE) * loyalty;
             let ledger = ledgers.get_mut(group_id).expect("ledger per group");
             ledger.taxed += count;
             for (good, income) in ledger.income.iter() {
@@ -750,16 +770,16 @@ fn resolve_city(
             continue;
         }
         let sacrifice = &config.sacrifice;
-        let mut count = 0.0;
-        let mut weight = 0.0;
+        let mut count = 0;
+        let mut weight = Fx::ZERO;
         for (good, w) in &sacrifice.vessels {
             let n = city.treasury.get(good).floor();
             count += n;
-            weight += n * w;
+            weight += *w * n;
         }
-        if count >= 1.0 {
+        if count >= 1 {
             for group in city.groups.values_mut() {
-                let room = (1.0 - group.culture / sacrifice.culture_max).max(0.0);
+                let room = (Fx::ONE - group.culture / sacrifice.culture_max).max(Fx::ZERO);
                 group.culture += sacrifice.culture_per_vessel * weight * room;
             }
             sacrificed = true;
@@ -783,11 +803,13 @@ fn resolve_city(
         .sum::<u32>()
         + outside.soldiers.0;
     let commons = city.population() + outside.soldiers.0 + outside.soldiers.1 - elite;
-    let mut unfed: f64 = 0.0;
+    let mut unfed: Fx = Fx::ZERO;
     for rule in &pop.consumption {
-        let per = rule.amount / pop.per_people;
-        let (elite_need, need) = (elite as f64 * per, (elite + commons) as f64 * per);
-        let mut got = 0.0;
+        let (elite_need, need) = (
+            rule.amount * elite / pop.per_people,
+            rule.amount * (elite + commons) / pop.per_people,
+        );
+        let mut got = Fx::ZERO;
         for good in &rule.goods {
             got += city.treasury.take(good, elite_need - got);
         }
@@ -799,15 +821,15 @@ fn resolve_city(
                 got += city.treasury.take(good, need - got);
             }
         }
-        if need > 0.0 && got + 1e-9 < need {
-            let shortfall = 1.0 - got / need;
+        if need > Fx::ZERO && got < need {
+            let shortfall = Fx::ONE - got / need;
             unfed = unfed.max(shortfall);
             events.push(
                 Event::new(format!(
                     "{}：全城缺{}，缺口 {:.0}%",
                     city.name,
                     rule.name,
-                    shortfall * 100.0
+                    shortfall * Fx::int(100)
                 ))
                 .to(insiders.iter().copied()),
             );
@@ -828,7 +850,7 @@ fn resolve_city(
         if paid {
             official.loyalty = (official.loyalty + shi.paid_loyalty_gain).min(shi.loyalty_max);
         } else {
-            official.loyalty = (official.loyalty - shi.unpaid_loyalty_penalty).max(0.0);
+            official.loyalty = (official.loyalty - shi.unpaid_loyalty_penalty).max(Fx::ZERO);
             unpaid += 1;
         }
         official.service_turns += 1;
@@ -845,16 +867,16 @@ fn resolve_city(
     let population = city.population();
     let housing = city.housing(config);
     // 藏富于民：全城民间财富的人均价值越高，所有人群的愉悦度越高
-    let wealth_bonus = if population == 0 || h.wealth_full_per_person <= 0.0 {
-        0.0
+    let wealth_bonus = if population == 0 || h.wealth_full_per_person <= Fx::ZERO {
+        Fx::ZERO
     } else {
-        let per_person = config.value_of(&city.private_wealth) / population as f64;
-        h.wealth_bonus * (per_person / h.wealth_full_per_person).min(1.0)
+        let per_person = config.value_of(&city.private_wealth) / population;
+        h.wealth_bonus * (per_person / h.wealth_full_per_person).min(Fx::ONE)
     };
-    let building_bonus: f64 = city
+    let building_bonus: Fx = city
         .buildings()
         .iter()
-        .map(|(id, n)| config.buildings[id].happiness * *n as f64)
+        .map(|(id, n)| config.buildings[id].happiness * *n)
         .sum();
     // 人口超出居住上限时拥挤，超出一倍时扣满
     let crowding = if population > housing {
@@ -865,76 +887,77 @@ fn resolve_city(
             ))
             .to(insiders.iter().copied()),
         );
-        ((population - housing) as f64 / housing.max(1) as f64).min(1.0)
+        Fx::ratio((population - housing) as i64, housing.max(1) as i64).min(Fx::ONE)
     } else {
-        0.0
+        Fx::ZERO
     };
     // 封君要的纳贡过火，封地百姓敌视封君；不过火时慢慢消退
     let f = &config.fief;
     let hostility_delta = match fief::overreach(city, config, month) {
-        Some(overreach) => f.hostility_gain * overreach.min(2.0),
+        Some(overreach) => f.hostility_gain * overreach.min(Fx::int(2)),
         None => -f.hostility_decay,
     };
     for group in city.groups.values_mut() {
-        group.hostility = (group.hostility + hostility_delta).clamp(0.0, f.hostility_max);
+        group.hostility = (group.hostility + hostility_delta).clamp(Fx::ZERO, f.hostility_max);
         if group.size == 0 {
             continue;
         }
         let ledger = &ledgers[&group.id];
-        let size = group.size as f64;
-        let guan_share = (ledger.guan_labor as f64 / size).min(1.0);
-        let taxed_share = (ledger.taxed as f64 / size).min(1.0);
+        let size = group.size as i64;
+        let guan_share = Fx::ratio(ledger.guan_labor as i64, size).min(Fx::ONE);
+        let taxed_share = Fx::ratio(ledger.taxed as i64, size).min(Fx::ONE);
         let mut delta = (h.target - group.happiness) * h.drift_rate + wealth_bonus + building_bonus;
         delta -= h.guan_penalty * guan_share;
         delta -= h.tax_penalty * city.tax_rate * taxed_share;
         delta -= h.hunger_penalty * ledger.unfed;
         delta -= h.crowding_penalty * crowding;
         // 农忙时被调去做别的工事
-        if h.busy_penalty[season] > 0.0 && group.has_skill(&h.busy_skill) {
+        if h.busy_penalty[season] > Fx::ZERO && group.has_skill(&h.busy_skill) {
             let taken: u32 = city
                 .assignments
                 .values()
                 .filter(|a| a.task.uses_labor() && !is_busy_work(&a.task, config, &h.busy_skill))
                 .filter_map(|a| a.workers.get(&group.id))
                 .sum();
-            delta -= h.busy_penalty[season] * (taken as f64 / size).min(1.0);
+            delta -= h.busy_penalty[season] * Fx::ratio(taken as i64, size).min(Fx::ONE);
         }
         if sacrificed {
             delta += h.sacrifice_bonus;
         }
-        group.happiness = (group.happiness + delta).clamp(0.0, h.max);
+        group.happiness = (group.happiness + delta).clamp(Fx::ZERO, h.max);
 
         // 忠诚度：税越低越忠诚，税重了就下降
         let l = &config.loyalty;
         let max_rate = config.economy.max_tax_rate;
-        let tax_burden = if max_rate > 0.0 {
+        let tax_burden = if max_rate > Fx::ZERO {
             city.tax_rate * taxed_share / max_rate
         } else {
-            0.0
+            Fx::ZERO
         };
         let loyalty_delta = l.low_tax_gain - l.high_tax_loss * tax_burden;
-        group.loyalty = (group.loyalty + loyalty_delta).clamp(0.0, l.max);
+        group.loyalty = (group.loyalty + loyalty_delta).clamp(Fx::ZERO, l.max);
     }
 
     // 8. 人口增减：增长不超过居住上限，各群人按想增长的多少分配剩余的空间
-    let wanted: BTreeMap<Id, f64> = city
+    let wanted: BTreeMap<Id, Fx> = city
         .groups
         .values()
-        .filter(|g| ledgers[&g.id].unfed <= 0.0 && g.happiness >= pop.growth_min_happiness)
-        .map(|g| (g.id, g.size as f64 * pop.growth_rate * g.happiness / h.max))
+        .filter(|g| ledgers[&g.id].unfed <= Fx::ZERO && g.happiness >= pop.growth_min_happiness)
+        .map(|g| (g.id, pop.growth_rate * g.size * g.happiness / h.max))
         .collect();
-    let total_wanted: f64 = wanted.values().sum();
-    let room = housing.saturating_sub(population) as f64;
-    let growth_factor = if total_wanted > 0.0 {
-        (room / total_wanted).min(1.0)
+    let total_wanted: Fx = wanted.values().sum();
+    let room = Fx::from(housing.saturating_sub(population));
+    let growth_factor = if total_wanted > Fx::ZERO {
+        (room / total_wanted).min(Fx::ONE)
     } else {
-        0.0
+        Fx::ZERO
     };
     for group in city.groups.values_mut() {
         let ledger = &ledgers[&group.id];
-        let size = group.size as f64;
-        if ledger.unfed > 0.0 {
-            let dead = (size * ledger.unfed * pop.starvation_rate).ceil() as u32;
+        if ledger.unfed > Fx::ZERO {
+            let dead = (ledger.unfed * pop.starvation_rate * group.size)
+                .ceil()
+                .max(0) as u32;
             group.size = group.size.saturating_sub(dead);
             if dead > 0 {
                 events.push(
@@ -945,11 +968,11 @@ fn resolve_city(
         } else if let Some(want) = wanted.get(&group.id) {
             group.growth_carry += want * growth_factor;
             let born = group.growth_carry.floor();
-            group.growth_carry -= born;
-            group.size += born as u32;
+            group.growth_carry -= Fx::int(born);
+            group.size += born.max(0) as u32;
         }
         if group.happiness < pop.emigration_threshold {
-            let left = (group.size as f64 * pop.emigration_rate).ceil() as u32;
+            let left = (pop.emigration_rate * group.size).ceil().max(0) as u32;
             group.size = group.size.saturating_sub(left);
             if left > 0 {
                 events.push(
@@ -975,7 +998,7 @@ fn can_make(city: &City, config: &Config, recipe: &RecipeDef, group: &PopGroup) 
             .is_none_or(|f| city.has_building(f, Mode::Min))
         && recipe
             .min_specialization
-            .is_none_or(|min| config.specialization(group.skills.len()) + 1e-9 >= min)
+            .is_none_or(|min| config.specialization(group.skills.len()) >= min)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -985,10 +1008,10 @@ fn produce(
     recipe: &RecipeDef,
     group_id: Id,
     workers: u32,
-    effective: f64,
+    effective: Fx,
     mode: Mode,
     season: usize,
-    city_mult: f64,
+    city_mult: Fx,
     ledgers: &mut BTreeMap<Id, Ledger>,
 ) {
     if workers == 0 {
@@ -1011,7 +1034,7 @@ fn produce(
         // 民营不罢工，但对管理者不够忠诚时产量下降
         scale *= config.disloyalty_mult(group.loyalty, config.loyalty.min_output);
     }
-    if scale <= 0.0 {
+    if scale <= Fx::ZERO {
         return;
     }
 
@@ -1021,14 +1044,14 @@ fn produce(
         Mode::Min => (&mut city.private_wealth, None),
     };
     // 原料不足时按比例减产
-    let mut factor: f64 = 1.0;
+    let mut factor: Fx = Fx::ONE;
     for (good, per_worker) in recipe.inputs.iter() {
         let need = per_worker * scale;
-        if need > 0.0 {
+        if need > Fx::ZERO {
             factor = factor.min(stock.get(good) / need);
         }
     }
-    let scale = scale * factor.clamp(0.0, 1.0);
+    let scale = scale * factor.clamp(Fx::ZERO, Fx::ONE);
     for (good, per_worker) in recipe.inputs.iter() {
         stock.take(good, per_worker * scale);
     }
@@ -1038,7 +1061,7 @@ fn produce(
         let amount = per_worker * scale;
         let made = match &config.goods[good].fine {
             Some(fine) => vec![
-                (good.as_str(), amount * (1.0 - fine_share)),
+                (good.as_str(), amount * (Fx::ONE - fine_share)),
                 (fine.as_str(), amount * fine_share),
             ],
             None => vec![(good.as_str(), amount)],
@@ -1127,7 +1150,7 @@ fn check_ritual(state: &mut GameState, config: &Config, events: &mut Vec<Event>)
                 ritual
                     .ding_goods
                     .iter()
-                    .map(|g| c.treasury.get(g).floor() as u32)
+                    .map(|g| c.treasury.get(g).floor_u32())
                     .sum::<u32>()
             })
             .sum();
@@ -1135,7 +1158,7 @@ fn check_ritual(state: &mut GameState, config: &Config, events: &mut Vec<Event>)
         let excess = dings.saturating_sub(limit);
         if excess > character.punished_ding_excess {
             character.reputation -=
-                (excess - character.punished_ding_excess) as f64 * ritual.excess_reputation_penalty;
+                ritual.excess_reputation_penalty * (excess - character.punished_ding_excess);
             character.usurped_turn = Some(turn);
             events.push(Event::public(format!(
                 "{}：拥有鼎 {} 只，超出身份上限 {} 只，僭越，风评下降",
@@ -1155,7 +1178,7 @@ fn check_ritual(state: &mut GameState, config: &Config, events: &mut Vec<Event>)
                 .copied()
                 .unwrap_or(0);
             if excess > before {
-                character.reputation -= (excess - before) as f64 * ritual.excess_tile_penalty;
+                character.reputation -= ritual.excess_tile_penalty * (excess - before);
                 character.usurped_turn = Some(turn);
                 events.push(Event::public(format!(
                     "{}：{}有地 {} 块，超出身份上限 {} 块，僭越，风评下降",
@@ -1306,11 +1329,11 @@ fn settle_tributes(state: &mut GameState, config: &Config, events: &mut Vec<Even
             continue;
         };
         let required = config.value_of(&tribute.goods);
-        let credited: f64 = tribute
+        let credited: Fx = tribute
             .goods
             .iter()
             .map(|(g, n)| {
-                config.goods.get(g).map_or(0.0, |d| d.value) * tribute.delivered.get(g).min(*n)
+                config.goods.get(g).map_or(Fx::ZERO, |d| d.value) * tribute.delivered.get(g).min(*n)
             })
             .sum();
         tribute.delivered = Inventory::default();
@@ -1319,7 +1342,7 @@ fn settle_tributes(state: &mut GameState, config: &Config, events: &mut Vec<Even
                 Event::new(format!("{}：拒绝了{}过火的纳贡", city.name, liege_name))
                     .to(audience.iter().copied()),
             );
-        } else if credited + 1e-9 >= required {
+        } else if credited >= required {
             city.tribute_shortfall_years = 0;
             events.push(
                 Event::new(format!("{}：今年向{}纳贡已足", city.name, liege_name))
@@ -1340,7 +1363,7 @@ fn settle_tributes(state: &mut GameState, config: &Config, events: &mut Vec<Even
                     "{}：今年向{}纳贡只纳了 {:.0}%，已连续 {} 年不足",
                     city.name,
                     liege_name,
-                    credited / required.max(1e-9) * 100.0,
+                    credited / required.max(Fx::EPS) * Fx::int(100),
                     city.tribute_shortfall_years
                 ))
                 .to(audience.iter().copied()),
@@ -1352,7 +1375,7 @@ fn settle_tributes(state: &mut GameState, config: &Config, events: &mut Vec<Even
 fn describe(goods: &Inventory, config: &Config) -> String {
     let parts: Vec<String> = goods
         .iter()
-        .filter(|(_, n)| **n >= 0.005)
+        .filter(|(_, n)| **n >= Fx::milli(5))
         .map(|(g, n)| format!("{} {n:.2}", config.good_name(g)))
         .collect();
     if parts.is_empty() {
@@ -1421,29 +1444,29 @@ fn settle_quotas(state: &mut GameState, config: &Config, events: &mut Vec<Event>
         let Some(quota) = &mut city.quota else {
             continue;
         };
-        let value = |good: &str| config.goods.get(good).map_or(0.0, |g| g.value);
-        let required: f64 = quota.goods.iter().map(|(g, n)| value(g) * n).sum();
-        let credited: f64 = quota
+        let value = |good: &str| config.goods.get(good).map_or(Fx::ZERO, |g| g.value);
+        let required: Fx = quota.goods.iter().map(|(g, n)| value(g) * n).sum();
+        let credited: Fx = quota
             .goods
             .iter()
             .map(|(g, n)| value(g) * quota.delivered.get(g).min(*n))
             .sum();
-        let delivered: f64 = quota
+        let delivered: Fx = quota
             .goods
             .iter()
             .map(|(g, _)| value(g) * quota.delivered.get(g))
             .sum();
         quota.delivered = Inventory::default();
-        if required <= 0.0 {
+        if required <= Fx::ZERO {
             continue;
         }
         let ratio = credited / required;
-        let (change, result) = if ratio + 1e-9 < 1.0 {
+        let (change, result) = if ratio < Fx::ONE {
             (
-                -q.fail_trust_penalty * (1.0 - ratio),
-                format!("只完成 {:.0}%", ratio * 100.0),
+                -q.fail_trust_penalty * (Fx::ONE - ratio),
+                format!("只完成 {:.0}%", ratio * Fx::int(100)),
             )
-        } else if delivered + 1e-9 >= required * q.exceed_ratio {
+        } else if delivered >= required * q.exceed_ratio {
             (q.exceed_trust, "超额完成".to_string())
         } else {
             (q.complete_trust, "完成".to_string())
@@ -1451,7 +1474,7 @@ fn settle_quotas(state: &mut GameState, config: &Config, events: &mut Vec<Event>
         let Some(owner) = state.characters.get_mut(&owner) else {
             continue;
         };
-        let trust = (owner.trust_in(manager, config) + change).clamp(0.0, q.max_trust);
+        let trust = (owner.trust_in(manager, config) + change).clamp(Fx::ZERO, q.max_trust);
         owner.trust.insert(manager, trust);
         events.push(
             Event::new(format!(
@@ -1497,6 +1520,8 @@ fn city_report(
                 .officials
                 .get(&a.shi)
                 .map_or_else(String::new, |o| o.name.clone()),
+            shi_id: a.shi,
+            groups: a.workers.clone(),
             task: a.task.clone(),
             workers: a.worker_count(),
             progress: a.progress,
@@ -1520,9 +1545,9 @@ fn city_report(
             .iter()
             .map(|(who, until)| (*who, until.saturating_sub(state.turn + 1)))
             .collect(),
-        neighbor_bonus: state.neighbor_mult(config, city) - 1.0,
+        neighbor_bonus: state.neighbor_mult(config, city) - Fx::ONE,
         wall: city.wall_hp(config),
-        center: (config.siege.center_hp - city.center_damage).max(0.0),
+        center: (config.siege.center_hp - city.center_damage).max(Fx::ZERO),
         occupied: city.status == CityStatus::Occupied,
         occupier: city.occupier,
         owner: city.owner,
@@ -1546,7 +1571,24 @@ fn city_report(
             })
             .collect(),
         jobs,
-        officials: city.officials.len() as u32,
+        tax_rate: city.tax_rate,
+        officials: city
+            .officials
+            .values()
+            .map(|o| OfficialReport {
+                id: o.id,
+                name: o.name.clone(),
+                skills: o.skills.clone(),
+                loyalty: o.loyalty,
+                service_turns: o.service_turns,
+                capacity: city.official_capacity(o.id, config),
+                assignment: city
+                    .assignments
+                    .values()
+                    .find(|a| a.shi == o.id)
+                    .map(|a| a.id),
+            })
+            .collect(),
         idle_officials: city
             .officials
             .keys()

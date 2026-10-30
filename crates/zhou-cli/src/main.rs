@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use zhou_core::turn::{AssignmentReport, CellReport, CityReport};
 use zhou_core::{
-    Building, Config, Hex, Id, Inventory, Mode, Task, TurnReport, end_turn, load_scenario,
+    Building, Config, Fx, Hex, Id, Inventory, Mode, Task, TurnReport, end_turn, load_scenario,
 };
 
 #[derive(Parser)]
@@ -194,7 +194,7 @@ fn print_report(report: &TurnReport, config: &Config) {
                 let mut text = format!(
                     "{elite}{unit} {} 人（装备 {:.0}%）",
                     s.count,
-                    s.equipped * 100.0
+                    s.equipped * 100
                 );
                 if s.gear.iter().next().is_some() {
                     text += &format!("[{}]", format_inventory(&s.gear, config));
@@ -222,7 +222,7 @@ fn print_report(report: &TurnReport, config: &Config) {
             march += &format!(
                 "，断粮 {} 回合、战斗力剩 {:.0}%",
                 army.hunger,
-                army.strength * 100.0
+                army.strength * 100
             );
         }
         println!(
@@ -306,15 +306,15 @@ fn print_city<'a>(
         "  【{}】{}{}{}  人口 {}/{}  士人 {}（空闲 {}）  建筑 {}",
         city.name,
         country_of(city.country),
-        if city.neighbor_bonus > 0.0 {
-            format!("  邻城增益 +{:.0}%", city.neighbor_bonus * 100.0)
+        if city.neighbor_bonus > Fx::ZERO {
+            format!("  邻城增益 +{:.0}%", city.neighbor_bonus * 100)
         } else {
             String::new()
         },
         defense,
         city.population,
         city.housing,
-        city.officials,
+        city.officials.len(),
         city.idle_officials,
         if buildings.is_empty() {
             "无".into()
@@ -360,7 +360,7 @@ fn print_city<'a>(
         rule += &match &city.tribute {
             None => format!(
                 "  纳贡：按例纳府库产出的 {:.0}%",
-                config.fief.auto_rate * 100.0
+                config.fief.auto_rate * 100
             ),
             Some(t) => {
                 let progress: Vec<String> = t
@@ -541,7 +541,7 @@ fn mode_name(mode: Mode) -> &'static str {
 fn format_inventory(inventory: &Inventory, config: &Config) -> String {
     let items: Vec<String> = inventory
         .iter()
-        .filter(|(_, amount)| **amount >= 0.05)
+        .filter(|(_, amount)| **amount >= Fx::milli(50))
         .map(|(good, amount)| format!("{} {:.1}", config.good_name(good), amount))
         .collect();
     if items.is_empty() {

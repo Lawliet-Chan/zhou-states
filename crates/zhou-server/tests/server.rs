@@ -33,6 +33,8 @@ fn players_log_in_command_and_end_turns_together() {
     let out = g.handle(1, ClientMsg::Login { player: KING });
     let welcome = json(&out[0].1);
     assert_eq!(welcome["type"], "welcome");
+    assert_eq!(welcome["config"]["categories"]["ritual"], "礼器");
+    assert!(welcome["config"]["units"]["cavalry"]["name"].is_string());
     let cities = welcome["view"]["cities"].as_array().unwrap();
     assert_eq!(cities.len(), 1);
     assert_eq!(cities[0]["id"], CHENGZHOU);
@@ -61,7 +63,7 @@ fn players_log_in_command_and_end_turns_together() {
             req: 8,
             command: Box::new(Command::SetTaxRate {
                 city: WEI_CITY,
-                rate: 0.3,
+                rate: zhou_core::Fx::milli(300),
             }),
         },
     );
@@ -74,7 +76,7 @@ fn players_log_in_command_and_end_turns_together() {
             req: 9,
             command: Box::new(Command::SetTaxRate {
                 city: CHENGZHOU,
-                rate: 0.3,
+                rate: zhou_core::Fx::milli(300),
             }),
         },
     );
@@ -148,10 +150,19 @@ async fn clients_talk_json_over_websocket() {
     assert_eq!(recv(&mut ws).await["type"], "welcome");
     assert_eq!(recv(&mut ws).await["type"], "waiting");
 
+    // 数值一律是整数（千分之一为单位），发小数看不懂
     let command = json!({
         "type": "command",
         "req": 1,
         "command": {"type": "set_tax_rate", "city": CHENGZHOU, "rate": 0.25}
+    });
+    ws.send(Message::text(command.to_string())).await.unwrap();
+    assert_eq!(recv(&mut ws).await["type"], "error");
+
+    let command = json!({
+        "type": "command",
+        "req": 1,
+        "command": {"type": "set_tax_rate", "city": CHENGZHOU, "rate": 250}
     });
     ws.send(Message::text(command.to_string())).await.unwrap();
     let result = recv(&mut ws).await;

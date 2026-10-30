@@ -7,6 +7,7 @@
 //! 辎重兵被敌军攻击就全部被杀，粮道被袭；找不到路、起点城不在手里、府库的粮不够，都算断粮。
 //! 断粮后战斗力每回合下降，断得越久降得越快，降到 0 时军队就地溃散；恢复供粮，战斗力直接回满。
 
+use crate::fx::Fx;
 use serde::{Deserialize, Serialize};
 
 use crate::army::{Army, Squad, SquadOrder, army_name, can_command};
@@ -37,9 +38,9 @@ impl Army {
     }
 
     /// 断粮后战斗力剩下的比例：第 n 个回合断粮时再降 n × starve_rate。
-    pub fn fed_mult(&self, config: &Config) -> f64 {
-        let h = self.hunger as f64;
-        (1.0 - config.supply.starve_rate * h * (h + 1.0) / 2.0).max(0.0)
+    pub fn fed_mult(&self, config: &Config) -> Fx {
+        let h = self.hunger;
+        (Fx::ONE - config.supply.starve_rate * (h * (h + 1) / 2)).max(Fx::ZERO)
     }
 }
 
@@ -238,12 +239,12 @@ pub(crate) fn feed(state: &mut GameState, config: &Config, events: &mut Vec<Even
             Ok((from, need)) => {
                 let city = state.cities.get_mut(&from).expect("checked");
                 if need.iter().all(|(goods, amount)| {
-                    goods.iter().map(|g| city.treasury.get(g)).sum::<f64>() + 1e-9 >= *amount
+                    goods.iter().map(|g| city.treasury.get(g)).sum::<Fx>() >= *amount
                 }) {
                     for (goods, amount) in &need {
-                        let mut got = 0.0;
+                        let mut got = Fx::ZERO;
                         for good in goods {
-                            got += city.treasury.take(good, amount - got);
+                            got += city.treasury.take(good, *amount - got);
                         }
                     }
                     true
@@ -262,7 +263,7 @@ pub(crate) fn feed(state: &mut GameState, config: &Config, events: &mut Vec<Even
             continue;
         }
         army.hunger += 1;
-        if army.fed_mult(config) <= 0.0 {
+        if army.fed_mult(config) <= Fx::ZERO {
             events.push(
                 Event::new(format!("{name}断粮太久，就地溃散"))
                     .to([commander])
@@ -274,7 +275,7 @@ pub(crate) fn feed(state: &mut GameState, config: &Config, events: &mut Vec<Even
 }
 
 /// 一项消耗：用哪几种物品（任意一种都行）、要多少。
-type Ration = (Vec<String>, f64);
+type Ration = (Vec<String>, Fx);
 
 /// 这支军队这回合要从粮道领的粮：每项消耗用哪几种物品、要多少。
 fn supply_need(
@@ -289,13 +290,13 @@ fn supply_need(
     }
     let path = route(state, config, army, line.from).ok_or("粮道不通")?;
     let pop = &config.population;
-    let mouths = (army.size() + line.convoy.count) as f64;
-    let length = 1.0 + path.len() as f64 * config.supply.per_cell;
+    let mouths = army.size() + line.convoy.count;
+    let length = Fx::ONE + config.supply.per_cell * path.len();
     Ok((
         line.from,
         pop.consumption
             .iter()
-            .map(|r| (r.goods.clone(), mouths * r.amount / pop.per_people * length))
+            .map(|r| (r.goods.clone(), r.amount * mouths / pop.per_people * length))
             .collect(),
     ))
 }

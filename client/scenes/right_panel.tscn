@@ -1,0 +1,24 @@
+[gd_scene format=3]
+
+[node name="RightPanel" type="TabContainer"]
+custom_minimum_size = Vector2(400, 300)
+[node name="详情" type="ScrollContainer" parent="."]
+horizontal_scroll_mode = 0
+[node name="Margin" type="MarginContainer" parent="详情"]
+size_flags_horizontal = 3
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_bottom = 8
+[node name="Content" type="VBoxContainer" parent="详情/Margin"]
+theme_override_constants/separation = 6
+[node name="天下" type="ScrollContainer" parent="."]
+horizontal_scroll_mode = 0
+[node name="Margin" type="MarginContainer" parent="天下"]
+size_flags_horizontal = 3
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_bottom = 8
+[node name="Content" type="VBoxContainer" parent="天下/Margin"]
+theme_override_constants/separation = 6

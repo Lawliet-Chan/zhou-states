@@ -1,0 +1,19 @@
+[gd_scene format=3]
+
+[node name="TopBar" type="PanelContainer"]
+[node name="Row" type="HBoxContainer" parent="."]
+theme_override_constants/separation = 18
+[node name="Title" type="Label" parent="Row"]
+text = "其惟春秋"
+theme_override_font_sizes/font_size = 22
+[node name="Date" type="Label" parent="Row"]
+text = "年月 · 回合"
+[node name="Character" type="Label" parent="Row"]
+text = "人物"
+[node name="Spacer" type="Control" parent="Row"]
+size_flags_horizontal = 3
+[node name="Waiting" type="Label" parent="Row"]
+text = "等待玩家"
+[node name="EndTurn" type="Button" parent="Row"]
+text = "结束回合"
+toggle_mode = true

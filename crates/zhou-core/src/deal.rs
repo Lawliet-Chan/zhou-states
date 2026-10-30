@@ -2,6 +2,7 @@
 //! 只给不要是赠与，只要不给是索取，两边都有是交易。可以拿来往来的有物资、整座城、通行权。
 //! 提议只在发起的当回合有效，回合结束时还没答复就自动作废。
 
+use crate::fx::Fx;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -92,7 +93,7 @@ pub(crate) fn check_stake_with(
         .ok_or(CommandError::NoSuchCharacter(who))?;
     check_goods(config, &stake.private)?;
     for (good, amount) in stake.private.iter() {
-        if character.private_store.get(good) + 1e-9 < *amount {
+        if character.private_store.get(good) < *amount {
             return Err(CommandError::NotEnoughInPrivateStore(good.clone()));
         }
     }
@@ -100,7 +101,7 @@ pub(crate) fn check_stake_with(
         let city = owned_city(state, who, *city_id)?;
         check_goods(config, goods)?;
         for (good, amount) in goods.iter() {
-            if city.treasury.get(good) + 1e-9 < *amount {
+            if city.treasury.get(good) < *amount {
                 return Err(CommandError::NotEnoughInTreasury(good.clone()));
             }
         }
@@ -295,7 +296,7 @@ fn check_goods(config: &Config, goods: &Inventory) -> Result<(), CommandError> {
         if !config.goods.contains_key(good) {
             return Err(CommandError::NoSuchGood(good.clone()));
         }
-        if *amount <= 0.0 {
+        if *amount <= Fx::ZERO {
             return Err(CommandError::ZeroCount);
         }
     }

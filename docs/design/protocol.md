@@ -24,14 +24,22 @@ cargo run -p zhou-server -- --addr 127.0.0.1:7878 --turn-seconds 0
 
 | type | 字段 | 什么时候发 |
 |---|---|---|
-| `welcome` | `player`、`view`、`last_turn` | 登录成功。`view` 是眼下的情况，`last_turn` 是上一回合的报告（刚开局时为 null） |
+| `welcome` | `player`、`config`、`view`、`last_turn` | 登录成功。`config` 是全部数值配置，`view` 是眼下的情况，`last_turn` 是上一回合的报告（刚开局时为 null） |
 | `result` | `req`、`ok`、`ids`、`error` | 指令的结果，只发给下指令的人。`ids` 是新建出来的东西（新军队、新战争……），`error` 是失败的原因 |
 | `view` | `view` | 有人下了指令、情况有变时，发给所有在线的人，各自只含自己看得到的部分 |
 | `waiting` | `ready`、`waiting` | 谁点了结束回合、还在等谁 |
 | `turn_ended` | `report` | 回合结算完，发这一回合的报告，之后就是新回合 |
 | `error` | `message` | 消息看不懂、没登录就下指令等 |
 
-`view` 和 `report` 都是 `PlayerReport`（见 `crates/zhou-core/src/view.rs`），只含这个人看得到的东西（战争迷雾）：自己的城的全部内情、自己的军队、视野里和记得的别人的军队与城的外观、和他有关或者他看得到的消息。回合中的 `view` 里，`events` 是这一回合到目前为止发生的事；城的工作记录（`jobs`）只在回合结算的报告里有。
+`view` 和 `report` 都是 `PlayerReport`（见 `crates/zhou-core/src/view.rs`），只含这个人看得到的东西（战争迷雾）：自己的城的全部内情、自己的军队、视野里和记得的别人的军队与城的外观、和他有关或者他看得到的消息。报告里还有 `offers`（别人给他的、还没答复的管理任命和封授）和 `deals`（他提出的和别人向他提出的交易，当回合有效）。回合中的 `view` 里，`events` 是这一回合到目前为止发生的事；城的工作记录（`jobs`）只在回合结算的报告里有。
+
+## 配置
+
+`welcome` 里的 `config` 就是 `config/balance.toml` 转成的 JSON，字段名、结构和 toml 一样（见 `crates/zhou-core/src/config.rs`），只在登录时发一次。报告里的物品、兵种、地形、建筑等都用 key 表示，前端拿 key 去配置里查中文名和数值，例如物品类别 `ritual` → `config.categories.ritual`（「礼器」），兵种 `cavalry` → `config.units.cavalry.name`，身份 `nan` → `config.ranks.nan`（「男」）。前端不要自己再抄一份数值。
+
+## 数值
+
+所有数值都是整数，没有浮点数。带小数的量（物资、比例、倍率、愉悦度、风评……）以千分之一为单位：1.5 存为 `1500`，25% 存为 `250`。人数、回合数、id 等本来就是整数的照常。报告、配置、指令都是这样，客户端发小数服务器不认（回 `error`）。客户端显示时再换算。
 
 ## 坐标
 

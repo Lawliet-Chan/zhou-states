@@ -1,5 +1,6 @@
 //! 封授与纳贡：判断纳贡是否过火、封君征讨封臣的理由。
 
+use crate::fx::Fx;
 use serde::Serialize;
 
 use crate::config::Config;
@@ -7,27 +8,27 @@ use crate::state::{City, GameState};
 
 /// 判断纳贡是否过火时参照的府库一年总产出价值：有去年的就用去年的，
 /// 否则用今年到目前为止的折算成一年。`months` 是今年已经结算过的回合数。
-pub fn yearly_income_value(city: &City, config: &Config, months: u32) -> f64 {
+pub fn yearly_income_value(city: &City, config: &Config, months: u32) -> Fx {
     match &city.last_income {
         Some(last) => config.value_of(last),
-        None if months == 0 => 0.0,
-        None => config.value_of(&city.income) * config.turns_per_year() as f64 / months as f64,
+        None if months == 0 => Fx::ZERO,
+        None => config.value_of(&city.income) * config.turns_per_year() / months,
     }
 }
 
 /// 封君指定的纳贡过火了多少：要的总价值是上限的几倍再减 1。没有指定纳贡或者没有过火时返回 None。
-pub fn overreach(city: &City, config: &Config, months: u32) -> Option<f64> {
+pub fn overreach(city: &City, config: &Config, months: u32) -> Option<Fx> {
     let tribute = city.tribute.as_ref()?;
     let demanded = config.value_of(&tribute.goods);
     let limit = yearly_income_value(city, config, months) * config.fief.excessive_ratio;
-    if demanded <= limit + 1e-9 {
+    if demanded <= limit {
         return None;
     }
     // 府库没有产出时，要什么都算过火，按最重的算
-    Some(if limit > 0.0 {
-        demanded / limit - 1.0
+    Some(if limit > Fx::ZERO {
+        demanded / limit - Fx::ONE
     } else {
-        f64::INFINITY
+        Fx::MAX
     })
 }
 

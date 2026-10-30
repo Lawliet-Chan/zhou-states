@@ -1,6 +1,9 @@
 # 数值配置
 # 所有可调整的数值都在这里，改完重新运行即可生效，不需要改代码。
 # 物品、行业、配方、建筑都用英文 id 引用，name 是显示用的中文名。
+#
+# 数值一律写整数。带小数的量（物资、比例、倍率、愉悦度……）以千分之一为单位：
+# 1.5 写作 1500，5% 写作 50，1 倍写作 1000。人数、回合数、格数等本来就是整数的照写
 
 # 一回合为一个月，每季 months_per_season 个回合，一年 12 个回合。季节顺序即回合顺序
 # 下面所有「每回合」的数值都是每月的量；人力（人 × 回合）也按月计
@@ -9,23 +12,23 @@ months_per_season = 3
 
 [population]
 # 消耗按每多少人计算
-per_people = 100
+per_people = 100000
 # 技能槽上限
 max_skills = 4
 # 人群没有指定技能时的初始技能。没有人生下来什么都不会，新生的人口继承所在人群的技能槽
 initial_skill = "farming"
 # 技能槽中有 1/2/3/4 项技能时的专精度
-specialization = [1.0, 0.85, 0.7, 0.6]
+specialization = [1000, 850, 700, 600]
 # 愉悦度满值时，每回合的人口增长率
-growth_rate = 0.0066
+growth_rate = 7
 # 愉悦度低于该值时人口不增长
-growth_min_happiness = 400
+growth_min_happiness = 400000
 # 愉悦度低于该值时人口开始外流
-emigration_threshold = 200
+emigration_threshold = 200000
 # 人口外流时，每回合离开的比例
-emigration_rate = 0.017
+emigration_rate = 17
 # 完全断粮时，每回合饿死的比例（按缺口比例折算）
-starvation_rate = 0.017
+starvation_rate = 17
 # 消耗不足时，是否由府库补足
 treasury_covers_shortfall = true
 
@@ -33,89 +36,99 @@ treasury_covers_shortfall = true
 [[population.consumption]]
 name = "食物"
 goods = ["grain", "fish", "meat"]
-amount = 0.67
+amount = 670
 
 [[population.consumption]]
 name = "盐"
 goods = ["salt"]
-amount = 0.33
+amount = 330
 
 [happiness]
-max = 1000.0
+max = 1000000
 # 每回合愉悦度向 target 回归的比例
-target = 600.0
-drift_rate = 0.035
+target = 600000
+drift_rate = 35
 # 整群人全部投入官营或营建时，每回合降低的愉悦度（按参与比例折算）
-guan_penalty = 20.0
+guan_penalty = 20000
 # 税率为 100% 时，每回合降低的愉悦度（按税率和被征税比例折算）
-tax_penalty = 100.0
+tax_penalty = 100000
 # 完全断粮时，每回合降低的愉悦度（按缺口比例折算）
-hunger_penalty = 67.0
+hunger_penalty = 67000
 # 本回合举行祭祀时，所有人群增加的愉悦度
-sacrifice_bonus = 20.0
+sacrifice_bonus = 20000
 # 藏富于民：全城民间财富的人均价值达到 wealth_full_per_person 时，
 # 所有人群每回合增加 wealth_bonus 愉悦度；不足时按比例折算
-wealth_bonus = 10.0
-wealth_full_per_person = 0.2
+wealth_bonus = 10000
+wealth_full_per_person = 200
 # 人口超出居住上限一倍时，每回合降低的愉悦度（按超出比例折算）
-crowding_penalty = 33.0
+crowding_penalty = 33000
 # 农忙：春播、秋收。会 busy_skill 的人在农忙时被派去做别的工事（种五谷以外的生产、营建、开垦、水利），
 # 除了 guan_penalty 之外，每回合再降低这么多愉悦度（按被调走的比例折算）。春、夏、秋、冬
 busy_skill = "farming"
-busy_penalty = [20.0, 0.0, 20.0, 0.0]
+busy_penalty = [20000, 0, 20000, 0]
 # 愉悦度为 0 和满值时的产出倍率，中间线性插值
-min_output_mult = 0.5
-max_output_mult = 1.2
+min_output_mult = 500
+max_output_mult = 1200
 
 [shi]
 # 「士」技能的 id
 skill = "shi"
 # 士人管理上限的基础值
-base_capacity = 50.0
-# 新任用士人的管理上限比例，随任职回合数提升到 1.0
-new_capacity_ratio = 0.6
+base_capacity = 50000
+# 新任用士人的管理上限比例，随任职回合数提升到 1000（满额）
+new_capacity_ratio = 600
 ramp_turns = 24
-# 忠诚度为 0 时的管理上限倍率，忠诚度满值时为 1.0
-loyalty_min_mult = 0.7
-loyalty_max = 1000.0
-initial_loyalty = 700.0
+# 忠诚度为 0 时的管理上限倍率，忠诚度满值时为 1000
+loyalty_min_mult = 700
+loyalty_max = 1000000
+initial_loyalty = 700000
 # 府库支付不起开支时，每回合降低的忠诚度；按时支付时增加的忠诚度
-unpaid_loyalty_penalty = 33.0
-paid_loyalty_gain = 3.3
+unpaid_loyalty_penalty = 33000
+paid_loyalty_gain = 3300
 
 # 每名士人每回合的开支，由府库支付
 [shi.upkeep]
-grain = 0.033
+grain = 33
 
 [economy]
 # 官营相对民营的生产效率
-guan_efficiency = 0.5
-default_tax_rate = 0.1
-max_tax_rate = 0.5
+guan_efficiency = 500
+default_tax_rate = 100
+max_tax_rate = 500
 # 所有者与管理者不是同一人时的产能
-absentee_mult = 0.6
+absentee_mult = 600
 # 城市处于被攻占状态时的产能
-occupied_mult = 0.75
+occupied_mult = 750
 
 [sacrifice]
 # 每件礼器每次祭祀增加的文化值，越接近上限增加越少
-culture_per_vessel = 5.0
-culture_max = 1000.0
+culture_per_vessel = 5000
+culture_max = 1000000
 
 # 可用于祭祀的礼器，以及每件折合的件数：精品折合更多
 [sacrifice.vessels]
-ding = 1.0
-gui = 1.0
-ding_fine = 2.0
-gui_fine = 2.0
+ding = 1000
+gui = 1000
+ding_fine = 2000
+gui_fine = 2000
+
+# 身份：id → 显示的名称
+[ranks]
+tianzi = "天子"
+gong = "公"
+hou = "侯"
+bo = "伯"
+zi = "子"
+nan = "男"
+none = "无爵"
 
 [ritual]
 # 列鼎制度中计数的礼器
 ding_goods = ["ding", "ding_fine"]
 # 每超出一只鼎扣除的风评。同一次僭越只扣一次，超出得更多时扣多出的部分
-excess_reputation_penalty = 5.0
+excess_reputation_penalty = 5000
 # 城市面积每超出一块地扣除的风评，规则同上
-excess_tile_penalty = 2.0
+excess_tile_penalty = 2000
 
 # 各身份的用鼎上限
 [ritual.ding_limit]
@@ -139,54 +152,54 @@ none = 7
 
 [quality]
 # 技能槽中有 1/2/3/4 项技能时，产出中精品的比例（只对设了 fine 的物品生效）
-fine_share = [0.3, 0.15, 0.05, 0.0]
+fine_share = [300, 150, 50, 0]
 
 [loyalty]
 # 人口对管理者个人的忠诚度。换管理者时归零重来，旧管理者攒下的不能带走
-max = 1000.0
-reset = 0.0
-initial = 500.0
+max = 1000000
+reset = 0
+initial = 500000
 # 每回合：不收税时 +low_tax_gain，税率为上限时 -high_tax_loss（按税率和被征税比例折算），两者相抵
 # 默认数值下，实际税率低于上限的 1/3（即 1/6）时忠诚度上升，高于时下降
-low_tax_gain = 3.3
-high_tax_loss = 10.0
+low_tax_gain = 3300
+high_tax_loss = 10000
 # 赏赐民众：人均每 1 价值的财货，所有人群增加的忠诚度
-grant_gain_per_value = 100.0
+grant_gain_per_value = 100000
 # 忠诚度低于 threshold 时开始出现下面的后果，越低越严重；下面各项是忠诚度为 0 时的值，中间线性插值
-threshold = 300.0
+threshold = 300000
 # 官营罢工：派去官营生产、营建、开垦、水利的人只有这个比例肯出工，其余的人回去自主民营
-guan_turnout = 0.5
+guan_turnout = 500
 # 民营的人不罢工，但收税只能收上来这个比例
-tax_share = 0.5
+tax_share = 500
 # 民营的产量倍率
-min_output = 0.8
+min_output = 800
 
 [quota]
 # 规定任务：所有者给管理者定每年要上缴的物资。管理者随时可以从府库上缴到所有者的私库，
 # 每年年末（冬季最后一个月）结算，看全年累计交够没有，影响所有者对管理者的信任
-initial_trust = 500.0
-max_trust = 1000.0
-complete_trust = 50.0
+initial_trust = 500000
+max_trust = 1000000
+complete_trust = 50000
 # 每种物资都交够、且总价值达到规定的 exceed_ratio 倍，算超额完成
-exceed_ratio = 1.2
-exceed_trust = 120.0
+exceed_ratio = 1200
+exceed_trust = 120000
 # 一点没交时降低的信任，按缺口比例（按价值折算）减少
-fail_trust_penalty = 150.0
+fail_trust_penalty = 150000
 
 [fief]
 # 封授与纳贡。封地封出去就不能收回；封臣不守本分只能作为征讨的理由
 # 封君没有指定纳贡时，每年年末自动纳府库当年总产出的这个比例（按产出算，不按存量）
-auto_rate = 0.1
+auto_rate = 100
 # 封君也可以指定每年纳哪些物资、纳多少，取代自动纳贡。总价值超过府库一年总产出价值的这个比例，
 # 就算过火：封臣可以拒绝，封地百姓会敌视封君
-excessive_ratio = 0.3
-hostility_max = 1000.0
+excessive_ratio = 300
+hostility_max = 1000000
 # 过火的纳贡每回合增加的敌视：要的是上限的两倍时增加 hostility_gain，按超出的比例折算，最多再翻一倍
-hostility_gain = 20.0
+hostility_gain = 20000
 # 没有过火的纳贡时，敌视每回合消退的量
-hostility_decay = 3.0
+hostility_decay = 3000
 # 征讨的理由：封臣风评低于 low_reputation；合理的纳贡连续 shortfall_years 年没交够；最近一年内僭越过
-low_reputation = 0.0
+low_reputation = 0
 shortfall_years = 2
 
 [passage]
@@ -198,12 +211,12 @@ default_turns = 6
 # 邻城增益：同一个所有者的两座城，治所相距不超过 range 格，两座城的产出都增加 bonus。
 # 邻城有几座就加几份，最多加到 max
 range = 8
-bonus = 0.05
-max = 0.15
+bonus = 50
+max = 150
 
 [reclaim]
 # 开垦在春、夏、秋、冬的人力倍率。农忙的代价由 happiness.busy_penalty 和误了农时的收成体现
-season_mult = [1.0, 1.0, 1.0, 1.0]
+season_mult = [1000, 1000, 1000, 1000]
 
 [learning]
 # 学一项新技能需要的回合数，学习期间照常干活。丢弃技能、调整顺序当回合生效
@@ -223,29 +236,29 @@ military = "军备"
 money = "钱币"
 
 [goods]
-grain = { name = "粮", category = "food", value = 1.0 }
-fish = { name = "鱼", category = "food", value = 1.0 }
-meat = { name = "肉", category = "food", value = 1.5 }
-salt = { name = "盐", category = "food", value = 2.0 }
-hide = { name = "皮革", category = "material", value = 2.0 }
-horse = { name = "马", category = "military", value = 20.0 }
-bronze = { name = "青铜", category = "material", value = 5.0 }
-weapon = { name = "兵器", category = "military", value = 8.0, fine = "weapon_fine" }
-armor = { name = "甲", category = "military", value = 8.0, fine = "armor_fine" }
-ding = { name = "鼎", category = "ritual", value = 100.0, fine = "ding_fine" }
-gui = { name = "簋", category = "ritual", value = 50.0, fine = "gui_fine" }
-jade = { name = "玉器", category = "luxury", value = 30.0, fine = "jade_fine" }
-cloth = { name = "布", category = "luxury", value = 3.0, fine = "cloth_fine" }
-coin = { name = "钱币", category = "money", value = 1.0 }
-weapon_fine = { name = "精兵", category = "military", value = 24.0 }
-armor_fine = { name = "精甲", category = "military", value = 24.0 }
-ding_fine = { name = "精鼎", category = "ritual", value = 300.0 }
-gui_fine = { name = "精簋", category = "ritual", value = 150.0 }
-jade_fine = { name = "精玉", category = "luxury", value = 90.0 }
-cloth_fine = { name = "细布", category = "luxury", value = 9.0 }
-chariot = { name = "战车", category = "military", value = 60.0 }
-bow = { name = "弓矢", category = "military", value = 6.0 }
-siege_engine = { name = "攻城机", category = "military", value = 80.0 }
+grain = { name = "粮", category = "food", value = 1000 }
+fish = { name = "鱼", category = "food", value = 1000 }
+meat = { name = "肉", category = "food", value = 1500 }
+salt = { name = "盐", category = "food", value = 2000 }
+hide = { name = "皮革", category = "material", value = 2000 }
+horse = { name = "马", category = "military", value = 20000 }
+bronze = { name = "青铜", category = "material", value = 5000 }
+weapon = { name = "兵器", category = "military", value = 8000, fine = "weapon_fine" }
+armor = { name = "甲", category = "military", value = 8000, fine = "armor_fine" }
+ding = { name = "鼎", category = "ritual", value = 100000, fine = "ding_fine" }
+gui = { name = "簋", category = "ritual", value = 50000, fine = "gui_fine" }
+jade = { name = "玉器", category = "luxury", value = 30000, fine = "jade_fine" }
+cloth = { name = "布", category = "luxury", value = 3000, fine = "cloth_fine" }
+coin = { name = "钱币", category = "money", value = 1000 }
+weapon_fine = { name = "精兵", category = "military", value = 24000 }
+armor_fine = { name = "精甲", category = "military", value = 24000 }
+ding_fine = { name = "精鼎", category = "ritual", value = 300000 }
+gui_fine = { name = "精簋", category = "ritual", value = 150000 }
+jade_fine = { name = "精玉", category = "luxury", value = 90000 }
+cloth_fine = { name = "细布", category = "luxury", value = 9000 }
+chariot = { name = "战车", category = "military", value = 60000 }
+bow = { name = "弓矢", category = "military", value = 6000 }
+siege_engine = { name = "攻城机", category = "military", value = 80000 }
 
 # ---------------------------------------------------------------- 行业
 # default_recipe：未被管理的人口按技能槽第一项技能自主民营时使用的配方
@@ -286,7 +299,7 @@ housing = 50
 jobs = 60
 building_slots = 3
 reclaim_skill = "farming"
-reclaim_labor = 600.0
+reclaim_labor = 600000
 move_cost = 1
 
 [terrains.water]
@@ -296,7 +309,7 @@ housing = 50
 jobs = 30
 building_slots = 3
 reclaim_skill = "fishing"
-reclaim_labor = 450.0
+reclaim_labor = 450000
 move_cost = 2
 
 [terrains.forest]
@@ -306,9 +319,9 @@ housing = 50
 jobs = 30
 building_slots = 3
 reclaim_skill = "hunting"
-reclaim_labor = 450.0
+reclaim_labor = 450000
 move_cost = 2
-defense_bonus = 0.25
+defense_bonus = 250
 
 [terrains.salt_pond]
 name = "盐池"
@@ -317,7 +330,7 @@ housing = 50
 jobs = 30
 building_slots = 3
 reclaim_skill = "salt_making"
-reclaim_labor = 600.0
+reclaim_labor = 600000
 move_cost = 1
 
 [terrains.copper_mine]
@@ -327,9 +340,9 @@ housing = 50
 jobs = 30
 building_slots = 3
 reclaim_skill = "smelting"
-reclaim_labor = 900.0
+reclaim_labor = 900000
 move_cost = 2
-defense_bonus = 0.25
+defense_bonus = 250
 
 [terrains.jade_mine]
 name = "玉矿"
@@ -338,9 +351,9 @@ housing = 50
 jobs = 20
 building_slots = 3
 reclaim_skill = "luxury"
-reclaim_labor = 900.0
+reclaim_labor = 900000
 move_cost = 2
-defense_bonus = 0.25
+defense_bonus = 250
 
 [terrains.pasture]
 name = "草场"
@@ -349,7 +362,7 @@ housing = 50
 jobs = 30
 building_slots = 3
 reclaim_skill = "horse_breeding"
-reclaim_labor = 450.0
+reclaim_labor = 450000
 move_cost = 1
 
 [terrains.mountain]
@@ -382,121 +395,121 @@ building_slots = 0
 name = "种五谷"
 skill = "farming"
 resource = "farmland"
-outputs = { grain = 0.01667 }
-season_mult = [0.0, 0.0, 3.0, 0.0]
+outputs = { grain = 17 }
+season_mult = [0, 0, 3000, 0]
 sowing_season = 0
 
 [recipes.fish]
 name = "捕鱼"
 skill = "fishing"
 resource = "water"
-outputs = { fish = 0.01 }
-season_mult = [1.0, 1.0, 1.0, 0.3]
+outputs = { fish = 10 }
+season_mult = [1000, 1000, 1000, 300]
 
 [recipes.salt]
 name = "制盐"
 skill = "salt_making"
 resource = "salt_pond"
-outputs = { salt = 0.06667 }
-season_mult = [1.0, 1.0, 1.0, 0.5]
+outputs = { salt = 67 }
+season_mult = [1000, 1000, 1000, 500]
 
 [recipes.hunt]
 name = "狩猎"
 skill = "hunting"
 resource = "forest"
-outputs = { meat = 0.006667, hide = 0.003333 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+outputs = { meat = 7, hide = 3 }
+season_mult = [1000, 1000, 1000, 1000]
 
 [recipes.horse]
 name = "驯马"
 skill = "horse_breeding"
 resource = "pasture"
-outputs = { horse = 0.001667 }
-season_mult = [1.0, 1.0, 1.0, 0.5]
+outputs = { horse = 2 }
+season_mult = [1000, 1000, 1000, 500]
 
 [recipes.bronze]
 name = "冶青铜"
 skill = "smelting"
 resource = "copper_mine"
 facility = "foundry"
-outputs = { bronze = 0.006667 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+outputs = { bronze = 7 }
+season_mult = [1000, 1000, 1000, 1000]
 
 [recipes.weapon]
 name = "铸兵器"
 skill = "armory"
 facility = "foundry"
-inputs = { bronze = 0.003333 }
-outputs = { weapon = 0.003333 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+inputs = { bronze = 3 }
+outputs = { weapon = 3 }
+season_mult = [1000, 1000, 1000, 1000]
 
 [recipes.armor]
 name = "制甲"
 skill = "armory"
-inputs = { hide = 0.006667 }
-outputs = { armor = 0.003333 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+inputs = { hide = 7 }
+outputs = { armor = 3 }
+season_mult = [1000, 1000, 1000, 1000]
 
 [recipes.chariot]
 name = "造战车"
 skill = "armory"
 facility = "foundry"
-inputs = { bronze = 0.003333, hide = 0.003333 }
-outputs = { chariot = 0.0008333 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+inputs = { bronze = 3, hide = 3 }
+outputs = { chariot = 1 }
+season_mult = [1000, 1000, 1000, 1000]
 
 [recipes.bow]
 name = "制弓矢"
 skill = "armory"
-inputs = { hide = 0.003333 }
-outputs = { bow = 0.003333 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+inputs = { hide = 3 }
+outputs = { bow = 3 }
+season_mult = [1000, 1000, 1000, 1000]
 
 [recipes.siege_engine]
 name = "造攻城机"
 skill = "armory"
-inputs = { bronze = 0.006667, hide = 0.006667 }
-outputs = { siege_engine = 0.0006667 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+inputs = { bronze = 7, hide = 7 }
+outputs = { siege_engine = 1 }
+season_mult = [1000, 1000, 1000, 1000]
 
 [recipes.ding]
 name = "铸鼎"
 skill = "ritual_craft"
 facility = "foundry"
-min_specialization = 0.85
-inputs = { bronze = 0.006667 }
-outputs = { ding = 0.0006667 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+min_specialization = 850
+inputs = { bronze = 7 }
+outputs = { ding = 1 }
+season_mult = [1000, 1000, 1000, 1000]
 
 [recipes.gui]
 name = "铸簋"
 skill = "ritual_craft"
 facility = "foundry"
-inputs = { bronze = 0.006667 }
-outputs = { gui = 0.001333 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+inputs = { bronze = 7 }
+outputs = { gui = 1 }
+season_mult = [1000, 1000, 1000, 1000]
 
 [recipes.jade]
 name = "琢玉"
 skill = "luxury"
 resource = "jade_mine"
-min_specialization = 0.85
-outputs = { jade = 0.001667 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+min_specialization = 850
+outputs = { jade = 2 }
+season_mult = [1000, 1000, 1000, 1000]
 
 [recipes.cloth]
 name = "纺织"
 skill = "weaving"
-outputs = { cloth = 0.01 }
-season_mult = [1.0, 1.0, 1.0, 1.5]
+outputs = { cloth = 10 }
+season_mult = [1000, 1000, 1000, 1500]
 
 # 商贾：交易赚的钱币归民间，市越多能容纳的商贾越多
 [recipes.trade]
 name = "经商"
 skill = "commerce"
 base_jobs = 10
-outputs = { coin = 0.05 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+outputs = { coin = 50 }
+season_mult = [1000, 1000, 1000, 1000]
 
 # ---------------------------------------------------------------- 建筑
 # labor：完成所需的总人力（人 × 回合）
@@ -514,32 +527,32 @@ season_mult = [1.0, 1.0, 1.0, 1.0]
 # 城墙：民有所依，安心度日。守城的作用等军队系统再做
 [buildings.city_wall]
 name = "城墙"
-labor = 900.0
-season_mult = [1.0, 1.0, 1.0, 1.0]
-happiness = 1.0
+labor = 900000
+season_mult = [1000, 1000, 1000, 1000]
+happiness = 1000
 
 [buildings.foundry]
 name = "冶厂"
 skill = "building"
-labor = 360.0
-materials = { bronze = 5.0 }
-season_mult = [1.0, 1.0, 1.0, 1.0]
+labor = 360000
+materials = { bronze = 5000 }
+season_mult = [1000, 1000, 1000, 1000]
 
 [buildings.market]
 name = "市"
 skill = "building"
-labor = 300.0
-season_mult = [1.0, 1.0, 1.0, 1.0]
+labor = 300000
+season_mult = [1000, 1000, 1000, 1000]
 jobs = { trade = 40 }
 
 # 宫殿：治所，士人办事更得力
 [buildings.palace]
 name = "宫殿"
 skill = "building"
-labor = 1200.0
-season_mult = [1.0, 1.0, 1.0, 1.0]
+labor = 1200000
+season_mult = [1000, 1000, 1000, 1000]
 housing = 30
-shi_capacity_bonus = 0.1
+shi_capacity_bonus = 100
 
 # ---------------------------------------------------------------- 地块改良
 # 水利夏季汛期最难做，冬季枯水最好做
@@ -550,64 +563,64 @@ shi_capacity_bonus = 0.1
 [improvements.irrigation]
 name = "水利"
 skill = "water"
-labor = 450.0
-season_mult = [0.5, 0.2, 0.5, 1.0]
+labor = 450000
+season_mult = [500, 200, 500, 1000]
 terrains = ["farmland"]
 max_level = 2
-yield_bonus = 0.25
+yield_bonus = 250
 
 # ---------------------------------------------------------------- 军事
 [military]
 # 技能槽里有这项技能的人才能当兵；技能槽里只有这一项的是脱产精兵，平时由府库供养
 skill = "martial"
 # 完全没有必需装备的兵，战斗力只剩这个比例；装备不全时按缺的比例折算
-unequipped_mult = 0.5
+unequipped_mult = 500
 
 [combat]
 # 战斗力 = 人数 × 兵种的攻击或防御 × 装备倍率 × 加成（带甲、地形、城墙）。没有随机，结果可复现
 # 每点战斗力每次交战杀死对方的人数。近战时守方用防御力还手，远程攻击对方不能还手
-lethality = 0.1
+lethality = 100
 # 远程攻击（弓矢、攻城机）的距离：隔一格
 ranged_range = 2
 # 全军带甲时防御增加的比例，带了一部分按比例算
-armor_bonus = 0.5
+armor_bonus = 500
 # 守城墙的兵还手时战斗力增加的比例
-wall_bonus = 1.0
+wall_bonus = 1000
 
 [siege]
 # 城里有这种建筑才算有城墙；没建成的城墙等于没有城墙
 wall_building = "city_wall"
-wall_hp = 200.0
-center_hp = 20.0
+wall_hp = 200000
+center_hp = 20000
 # 攻城机：步兵带着，隔一格就能打城墙。每架每次攻击打掉的防御值
 engine_good = "siege_engine"
-engine_damage = 5.0
+engine_damage = 5000
 # 不用攻城机时，每点战斗力打掉的城墙、城中心防御值
-wall_rate = 0.01
-center_rate = 0.1
+wall_rate = 10
+center_rate = 100
 # 修城墙：城墙不会自己回血，要派工人修；这回合挨了打就修不了
 repair_skill = "building"
-repair_per_100 = 10.0
+repair_per_100 = 10000
 
 [occupation]
 # 城中人群对占领者的初始忠诚度 = base_loyalty + 管城者风评 × reputation_mult（这项最多 reputation_max）
 #   + 对旧主的忠诚度低于 grudge_below 时，每低 1 点加 grudge_mult（这项最多 grudge_max）。最高为忠诚度满值
-base_loyalty = 300.0
-reputation_mult = 5.0
-reputation_max = 400.0
-grudge_below = 300.0
-grudge_mult = 0.5
-grudge_max = 150.0
+base_loyalty = 300000
+reputation_mult = 5000
+reputation_max = 400000
+grudge_below = 300000
+grudge_mult = 500
+grudge_max = 150000
 
 [war]
 # 国与国之间（含同一国的封臣之间）没有理由就开战，扣这么多风评。牵涉无国籍的人不用理由
-unjustified_penalty = 20.0
+unjustified_penalty = 20000
 # 讲和之后双方多少回合内不能再开战
 truce_turns = 12
 # 国战结束时封臣还没去打国君指定的城，扣的风评；也成为国君征讨他的理由
-task_penalty = 10.0
+task_penalty = 10000
 # 国君制止封臣之间的战争后，封臣每动手一次扣的风评；也成为国君征讨他的理由
-defy_penalty = 10.0
+defy_penalty = 10000
 
 [supply]
 # 出征（离开自己的城的地）的军队靠粮道供粮，粮从起点城的府库出，按全城人口的消耗标准算
@@ -615,9 +628,9 @@ defy_penalty = 10.0
 unit = "supply"
 convoy = 2
 # 粮道每多一格，军粮（连辎重兵在内）多耗这个比例
-per_cell = 0.05
-# 断粮的第 n 个回合，战斗力再降 n × starve_rate：0.1 时依次剩 90%、70%、40%，第 4 回合溃散
-starve_rate = 0.1
+per_cell = 50
+# 断粮的第 n 个回合，战斗力再降 n × starve_rate：100 时依次剩 90%、70%、40%，第 4 回合溃散
+starve_rate = 100
 
 [vision]
 # 战争迷雾：每个人只看得到自己视野内的东西，视野不共享。地形公开
@@ -643,9 +656,9 @@ name = "大邑"
 # 占领者劫掠府库或市民，可以按物品类别挑着抢，不挑就全拿；每座城每回合只能劫掠一次
 # 劫掠市民：所有人群的愉悦度、对占领者的忠诚度降低，占领者扣风评。按抢走的价值占民间财富的比例打折
 # 劫掠府库没有代价
-happiness_loss = 300.0
-loyalty_loss = 300.0
-reputation_loss = 10.0
+happiness_loss = 300000
+loyalty_loss = 300000
+reputation_loss = 10000
 
 # 兵种。gear：必需的装备，每人多少件；optional：可以选带的装备，每人多少件。
 # 编军队时装备从府库领，精品也算（比如精兵算兵器）；遣散时还回府库
@@ -656,28 +669,28 @@ reputation_loss = 10.0
 # 车兵：一乘战车三人、四匹马
 [units.chariot]
 name = "车兵"
-gear = { chariot = 0.3333, horse = 1.3333 }
+gear = { chariot = 333, horse = 1333 }
 moves = 3
-attack = 3.0
-defense = 2.0
+attack = 3000
+defense = 2000
 terrain_cost = { forest = 3, water = 3, copper_mine = 3, jade_mine = 3 }
 
 # 步兵：有兵器就能近战；带甲更好；带弓矢就是远程兵；带攻城机能攻城墙（每 50 人一架）
 [units.infantry]
 name = "步兵"
-gear = { weapon = 1.0 }
-optional = { armor = 1.0, bow = 1.0, siege_engine = 0.02 }
+gear = { weapon = 1000 }
+optional = { armor = 1000, bow = 1000, siege_engine = 20 }
 moves = 2
-attack = 1.0
-defense = 1.0
-ranged = 1.0
+attack = 1000
+defense = 1000
+ranged = 1000
 
 [units.cavalry]
 name = "骑兵"
-gear = { horse = 1.0 }
+gear = { horse = 1000 }
 moves = 4
-attack = 2.0
-defense = 1.0
+attack = 2000
+defense = 1000
 move_after_attack = true
 vision = 3
 
@@ -685,5 +698,5 @@ vision = 3
 [units.supply]
 name = "辎重"
 moves = 2
-attack = 0.2
-defense = 0.3
+attack = 200
+defense = 300

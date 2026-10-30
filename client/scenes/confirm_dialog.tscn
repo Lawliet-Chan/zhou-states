@@ -1,0 +1,7 @@
+[gd_scene format=3]
+
+[node name="ConfirmDialog" type="ConfirmationDialog"]
+title = "确认"
+dialog_text = "确认执行此操作？"
+ok_button_text = "是"
+cancel_button_text = "否"

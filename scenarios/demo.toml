@@ -39,13 +39,13 @@ capital = "wei"
 key = "king"
 name = "周王"
 rank = "tianzi"
-reputation = 800
+reputation = 800000
 
 [[characters]]
 key = "player"
 name = "姬虎"
 rank = "nan"
-reputation = 500
+reputation = 500000
 nationality = "wei_state"
 
 [[characters]]
@@ -57,7 +57,7 @@ nationality = "wei_state"
 key = "wei_bo"
 name = "卫伯"
 rank = "bo"
-reputation = 300
+reputation = 300000
 
 [[cities]]
 key = "bei"
@@ -71,65 +71,65 @@ seat = [1, 3]
 # 官营冶厂给府库铸兵器，民营冶厂供工匠自己冶铜
 guan_buildings = { foundry = 1 }
 min_buildings = { foundry = 1 }
-treasury = { grain = 20, salt = 5, bronze = 40, hide = 10, gui = 2 }
-private_wealth = { grain = 16, salt = 7 }
-tax_rate = 0.1
+treasury = { grain = 20000, salt = 5000, bronze = 40000, hide = 10000, gui = 2000 }
+private_wealth = { grain = 16000, salt = 7000 }
+tax_rate = 100
 
 [[cities.groups]]
 key = "dongguo"
 name = "东郭农人"
 size = 160
 skills = ["farming", "weaving"]
-culture = 100
-happiness = 600
+culture = 100000
+happiness = 600000
 
 [[cities.groups]]
 key = "nanli"
 name = "南里农人"
 size = 80
 skills = ["farming"]
-culture = 100
-happiness = 600
+culture = 100000
+happiness = 600000
 
 [[cities.groups]]
 key = "yanhu"
 name = "盐户"
 size = 20
 skills = ["salt_making", "fishing"]
-culture = 80
-happiness = 550
+culture = 80000
+happiness = 550000
 
 [[cities.groups]]
 key = "xishi"
 name = "西市工匠"
 size = 30
 skills = ["smelting", "armory"]
-culture = 120
-happiness = 600
+culture = 120000
+happiness = 600000
 
 [[cities.groups]]
 key = "shizu"
 name = "士族"
 size = 10
 skills = ["shi", "ritual_craft"]
-culture = 300
-happiness = 650
+culture = 300000
+happiness = 650000
 
 [[cities.groups]]
 key = "shangjia"
 name = "商贾"
 size = 15
 skills = ["commerce"]
-culture = 100
-happiness = 600
+culture = 100000
+happiness = 600000
 
 [[cities.groups]]
 key = "hegong"
 name = "河工"
 size = 10
 skills = ["water", "farming"]
-culture = 90
-happiness = 600
+culture = 90000
+happiness = 600000
 
 [[cities.officials]]
 key = "jia"
@@ -188,31 +188,31 @@ owner = "player"
 manager = "steward"
 totem = "玄鸟"
 seat = [3, 0]
-treasury = { grain = 40, salt = 10 }
-quota = { grain = 30 }
+treasury = { grain = 40000, salt = 10000 }
+quota = { grain = 30000 }
 
 [[cities.groups]]
 key = "yong_farmers"
 name = "鄘农人"
 size = 120
-culture = 80
-happiness = 600
+culture = 80000
+happiness = 600000
 
 [[cities.groups]]
 key = "yong_herders"
 name = "鄘牧人"
 size = 20
 skills = ["horse_breeding", "hunting"]
-culture = 80
-happiness = 600
+culture = 80000
+happiness = 600000
 
 [[cities.groups]]
 key = "yong_gentry"
 name = "鄘士族"
 size = 5
 skills = ["shi", "farming"]
-culture = 200
-happiness = 600
+culture = 200000
+happiness = 600000
 
 [[cities.officials]]
 key = "yong_shi"
@@ -233,32 +233,32 @@ name = "卫"
 owner = "wei_bo"
 manager = "wei_bo"
 totem = "白虎"
-treasury = { grain = 60, salt = 20 }
-private_wealth = { grain = 20, salt = 5 }
+treasury = { grain = 60000, salt = 20000 }
+private_wealth = { grain = 20000, salt = 5000 }
 
 [[cities.groups]]
 key = "wei_farmers"
 name = "卫农人"
 size = 160
 skills = ["farming", "fishing"]
-culture = 120
-happiness = 600
+culture = 120000
+happiness = 600000
 
 [[cities.groups]]
 key = "wei_jade"
 name = "卫玉工"
 size = 15
 skills = ["luxury"]
-culture = 150
-happiness = 600
+culture = 150000
+happiness = 600000
 
 [[cities.groups]]
 key = "wei_gentry"
 name = "卫士族"
 size = 8
 skills = ["shi"]
-culture = 250
-happiness = 650
+culture = 250000
+happiness = 650000
 
 [[cities.officials]]
 key = "wei_shi"
@@ -279,23 +279,23 @@ name = "成周"
 owner = "king"
 manager = "king"
 totem = "周"
-treasury = { grain = 80, salt = 30, bronze = 20 }
-private_wealth = { grain = 20, salt = 10 }
+treasury = { grain = 80000, salt = 30000, bronze = 20000 }
+private_wealth = { grain = 20000, salt = 10000 }
 
 [[cities.groups]]
 key = "zhou_farmers"
 name = "周农人"
 size = 150
-culture = 200
-happiness = 650
+culture = 200000
+happiness = 650000
 
 [[cities.groups]]
 key = "zhou_gentry"
 name = "周士族"
 size = 12
 skills = ["shi", "ritual_craft"]
-culture = 400
-happiness = 700
+culture = 400000
+happiness = 700000
 
 [[cities.officials]]
 key = "zhou_shi"

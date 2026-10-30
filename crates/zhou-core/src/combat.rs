@@ -7,6 +7,7 @@
 //! 攻城：城墙立着时只能打城墙，墙上的守军还手，城墙一破，墙上的守军随之覆灭；
 //! 墙里其余的守军要另外打败，打光了才能打城中心，城中心打下来城就被攻占。
 
+use crate::fx::Fx;
 use serde::{Deserialize, Serialize};
 
 use crate::army::{Army, Squad, army_name};
@@ -18,63 +19,63 @@ use crate::state::{Character, City, CityStatus, GameState, Id};
 
 impl Squad {
     /// 近战攻击力。
-    pub fn attack(&self, config: &Config) -> f64 {
-        self.count as f64 * config.units[&self.unit].attack * self.gear_mult(config)
+    pub fn attack(&self, config: &Config) -> Fx {
+        config.units[&self.unit].attack * self.count * self.gear_mult(config)
     }
 
     /// 防御力，带甲的部分按比例加成。
-    pub fn defense(&self, config: &Config) -> f64 {
+    pub fn defense(&self, config: &Config) -> Fx {
         let def = &config.units[&self.unit];
         let armored = self.carried_share(config, "armor");
-        self.count as f64
-            * def.defense
+        def.defense
+            * self.count
             * self.gear_mult(config)
-            * (1.0 + config.combat.armor_bonus * armored)
+            * (Fx::ONE + config.combat.armor_bonus * armored)
     }
 
     /// 远程攻击力：只算带了弓矢的人。
-    pub fn ranged(&self, config: &Config) -> f64 {
+    pub fn ranged(&self, config: &Config) -> Fx {
         let def = &config.units[&self.unit];
-        if def.ranged <= 0.0 {
-            return 0.0;
+        if def.ranged <= Fx::ZERO {
+            return Fx::ZERO;
         }
-        self.count as f64 * self.carried_share(config, "bow") * def.ranged * self.gear_mult(config)
+        def.ranged * self.count * self.carried_share(config, "bow") * self.gear_mult(config)
     }
 
     /// 可选装备够几成的人用，精品也算。
-    fn carried_share(&self, config: &Config, good: &str) -> f64 {
+    fn carried_share(&self, config: &Config, good: &str) -> Fx {
         let per = config.units[&self.unit].optional.get(good);
-        if per <= 0.0 || self.count == 0 {
-            return 0.0;
+        if per <= Fx::ZERO || self.count == 0 {
+            return Fx::ZERO;
         }
         let fine = config.goods.get(good).and_then(|g| g.fine.as_deref());
-        let have = self.gear.get(good) + fine.map_or(0.0, |f| self.gear.get(f));
-        (have / (per * self.count as f64)).min(1.0)
+        let have = self.gear.get(good) + fine.map_or(Fx::ZERO, |f| self.gear.get(f));
+        (have / (per * self.count)).min(Fx::ONE)
     }
 }
 
 impl Army {
     /// 近战攻击力，断粮时打折。
-    pub fn attack(&self, config: &Config) -> f64 {
-        self.squads.iter().map(|s| s.attack(config)).sum::<f64>() * self.fed_mult(config)
+    pub fn attack(&self, config: &Config) -> Fx {
+        self.squads.iter().map(|s| s.attack(config)).sum::<Fx>() * self.fed_mult(config)
     }
 
-    pub fn ranged(&self, config: &Config) -> f64 {
-        self.squads.iter().map(|s| s.ranged(config)).sum::<f64>() * self.fed_mult(config)
+    pub fn ranged(&self, config: &Config) -> Fx {
+        self.squads.iter().map(|s| s.ranged(config)).sum::<Fx>() * self.fed_mult(config)
     }
 
     /// 防御力，加上所在地形的加成，断粮时打折。
-    pub fn defense(&self, config: &Config, terrain: Option<&str>) -> f64 {
+    pub fn defense(&self, config: &Config, terrain: Option<&str>) -> Fx {
         let bonus = terrain
             .and_then(|t| config.terrains.get(t))
-            .map_or(0.0, |t| t.defense_bonus);
-        self.squads.iter().map(|s| s.defense(config)).sum::<f64>()
-            * (1.0 + bonus)
+            .map_or(Fx::ZERO, |t| t.defense_bonus);
+        self.squads.iter().map(|s| s.defense(config)).sum::<Fx>()
+            * (Fx::ONE + bonus)
             * self.fed_mult(config)
     }
 
     /// 带着的攻城机架数。
-    pub fn engines(&self, config: &Config) -> f64 {
+    pub fn engines(&self, config: &Config) -> Fx {
         self.squads
             .iter()
             .map(|s| s.gear.get(&config.siege.engine_good))
@@ -82,26 +83,26 @@ impl Army {
     }
 
     /// 死了 `dead` 人：按人数比例摊到各队，装备跟着人一起丢。返回实际死了几人。
-    fn lose(&mut self, dead: f64) -> u32 {
+    fn lose(&mut self, dead: Fx) -> u32 {
         let size = self.size();
         if size == 0 {
             return 0;
         }
-        let dead = (dead.round() as u32).min(size);
+        let dead = dead.round_u32().min(size);
         let mut left = dead;
         let n = self.squads.len();
         for (i, squad) in self.squads.iter_mut().enumerate() {
             let share = if i + 1 == n {
                 left
             } else {
-                ((dead as f64 * squad.count as f64 / size as f64).round() as u32).min(left)
+                (Fx::from(dead) * squad.count / size).round_u32().min(left)
             };
             let share = share.min(squad.count);
-            let keep = (squad.count - share) as f64 / squad.count.max(1) as f64;
+            let keep = squad.count - share;
             for amount in squad.gear.0.values_mut() {
-                *amount *= keep;
+                *amount = amount.mul_ratio(keep as i64, squad.count.max(1) as i64);
             }
-            squad.gear.0.retain(|_, a| *a > 1e-9);
+            squad.gear.0.retain(|_, a| *a > Fx::ZERO);
             squad.count -= share;
             left -= share;
         }
@@ -184,8 +185,12 @@ fn strike(
     if let Some(city) = city
         && city.wall_standing(config)
     {
-        let engines = if ranged { army.engines(config) } else { 0.0 };
-        if power <= 0.0 && engines <= 0.0 {
+        let engines = if ranged {
+            army.engines(config)
+        } else {
+            Fx::ZERO
+        };
+        if power <= Fx::ZERO && engines <= Fx::ZERO {
             return Err(CommandError::CannotAttack(army_id));
         }
         let (city_id, holder) = (city.id, city.holder());
@@ -198,7 +203,7 @@ fn strike(
         finish_attack(state, config, army_id);
         return Ok(());
     }
-    if power <= 0.0 {
+    if power <= Fx::ZERO {
         return Err(CommandError::CannotAttack(army_id));
     }
     let enemy = state
@@ -240,7 +245,7 @@ fn strike(
     let engines = if ranged {
         state.armies[&army_id].engines(config)
     } else {
-        0.0
+        Fx::ZERO
     };
     city.center_damage += power * config.siege.center_rate + engines * config.siege.engine_damage;
     let name = army_name(state, &state.armies[&army_id]);
@@ -284,7 +289,7 @@ fn battle(
     config: &Config,
     attacker: Id,
     defender: Id,
-    power: f64,
+    power: Fx,
     ranged: bool,
     events: &mut Vec<Event>,
 ) {
@@ -292,7 +297,7 @@ fn battle(
     let def = &state.armies[&defender];
     let terrain = state.map.get(def.pos).map(|c| c.terrain.as_str());
     let back = if ranged {
-        0.0
+        Fx::ZERO
     } else {
         def.defense(config, terrain) * k
     };
@@ -327,8 +332,8 @@ fn siege_wall(
     config: &Config,
     army_id: Id,
     city_id: Id,
-    power: f64,
-    engines: f64,
+    power: Fx,
+    engines: Fx,
     ranged: bool,
     events: &mut Vec<Event>,
 ) {
@@ -346,7 +351,7 @@ fn siege_wall(
         .tiles
         .values()
         .any(|t| t.pos.distance(attacker_pos) <= config.combat.ranged_range);
-    let back: f64 = on_wall
+    let back: Fx = on_wall
         .iter()
         .map(|id| {
             let a = &state.armies[id];
@@ -356,10 +361,10 @@ fn siege_wall(
                 a.defense(config, None)
             }
         })
-        .sum::<f64>()
-        * (1.0 + config.combat.wall_bonus)
+        .sum::<Fx>()
+        * (Fx::ONE + config.combat.wall_bonus)
         * config.combat.lethality;
-    let back = if near { back } else { 0.0 };
+    let back = if near { back } else { Fx::ZERO };
 
     let damage = power * s.wall_rate + engines * s.engine_damage;
     let name = army_name(state, &state.armies[&army_id]);
@@ -418,7 +423,7 @@ fn capture(state: &mut GameState, config: &Config, city_id: Id, by: Id, events: 
         .values()
         .any(|c| c.id != city_id && c.manager == Some(by));
     let city = state.cities.get_mut(&city_id).expect("exists");
-    city.center_damage = 0.0;
+    city.center_damage = Fx::ZERO;
     city.manager_offer = None;
     city.fief_offer = None;
     if city.owner == Some(by) {
@@ -510,7 +515,7 @@ pub fn appoint_occupation_manager(
                 return Err(CommandError::OfficialBusy(*shi));
             }
             // 出仕：离开原来的城，成为有名字的人物，随占领者的国籍
-            let mut character = Character::new(0, official.name.clone(), "none", 0.0);
+            let mut character = Character::new(0, official.name.clone(), "none", Fx::ZERO);
             character.nationality = nationality(actor);
             let id = state.alloc_id();
             character.id = id;
@@ -529,9 +534,10 @@ pub fn appoint_occupation_manager(
     let city = state.cities.get_mut(&city_id).expect("checked");
     city.manager = Some(manager);
     for group in city.groups.values_mut() {
-        let grudge = ((o.grudge_below - group.loyalty).max(0.0) * o.grudge_mult).min(o.grudge_max);
+        let grudge =
+            ((o.grudge_below - group.loyalty).max(Fx::ZERO) * o.grudge_mult).min(o.grudge_max);
         let trust = (reputation * o.reputation_mult).min(o.reputation_max);
-        group.loyalty = (o.base_loyalty + trust + grudge).clamp(0.0, config.loyalty.max);
+        group.loyalty = (o.base_loyalty + trust + grudge).clamp(Fx::ZERO, config.loyalty.max);
     }
     state.settle_locations();
     Ok(vec![manager])
@@ -560,7 +566,7 @@ pub fn engage(
     let Some((_, pos)) = enemy else {
         return false;
     };
-    let can_fight = !army.attacked && army.moves_left > 0 && army.attack(config) > 0.0;
+    let can_fight = !army.attacked && army.moves_left > 0 && army.attack(config) > Fx::ZERO;
     state.armies.get_mut(&army_id).expect("exists").dest = None;
     if can_fight {
         let _ = strike(state, config, army_id, pos, false, events);
@@ -644,16 +650,16 @@ pub fn plunder(
             true
         }
     });
-    let share = if total > 0.0 {
+    let share = if total > Fx::ZERO {
         config.value_of(&loot) / total
     } else {
-        0.0
+        Fx::ZERO
     };
     let p = &config.plunder;
     if target == PlunderTarget::Citizens {
         for group in city.groups.values_mut() {
-            group.happiness = (group.happiness - p.happiness_loss * share).max(0.0);
-            group.loyalty = (group.loyalty - p.loyalty_loss * share).max(0.0);
+            group.happiness = (group.happiness - p.happiness_loss * share).max(Fx::ZERO);
+            group.loyalty = (group.loyalty - p.loyalty_loss * share).max(Fx::ZERO);
         }
     }
     let name = city.name.clone();
