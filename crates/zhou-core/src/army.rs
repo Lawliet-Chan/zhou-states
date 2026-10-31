@@ -472,6 +472,18 @@ pub fn order_march(
     if army.commander != actor {
         return Err(CommandError::NotCommander(army_id));
     }
+    // 向相邻敌城治所行军就是近战攻城，仍由战斗规则验证兵种和城防。
+    if let Some(city_id) = state.city_at(to) {
+        let city = &state.cities[&city_id];
+        if city.seat == to
+            && city
+                .holder()
+                .is_some_and(|holder| state.at_war(actor, holder))
+            && army.pos.distance(to) <= 1
+        {
+            return crate::combat::attack(state, config, actor, army_id, to, false);
+        }
+    }
     let mut planned = army.clone();
     // 由权威规则计算路线和通行权，客户端只负责确认，不自行寻路。
     planned.force = true;
@@ -513,6 +525,24 @@ pub fn march(state: &mut GameState, config: &Config, army_id: Id, events: &mut V
     loop {
         let army = &state.armies[&army_id];
         let Some(dest) = army.dest else { return };
+        if army.pos.distance(dest) <= 1
+            && state.city_at(dest).is_some_and(|id| {
+                let city = &state.cities[&id];
+                city.seat == dest
+                    && city
+                        .holder()
+                        .is_some_and(|holder| state.at_war(army.commander, holder))
+            })
+        {
+            let commander = army.commander;
+            state.armies.get_mut(&army_id).expect("exists").dest = None;
+            if let Err(error) =
+                crate::combat::attack(state, config, commander, army_id, dest, false)
+            {
+                events.push(Event::new(format!("进攻城中心失败：{error}")).to([commander]));
+            }
+            return;
+        }
         let in_sight = crate::vision::enemies_in_sight(state, config, army);
         let path = state
             .map

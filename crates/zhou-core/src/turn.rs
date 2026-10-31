@@ -1294,7 +1294,7 @@ fn check_countries(state: &mut GameState, events: &mut Vec<Event>) {
             !state
                 .cities
                 .values()
-                .any(|c| c.owner == Some(country.ruler) && c.status != CityStatus::Occupied)
+                .any(|c| c.owner == Some(country.ruler) && c.holder() == Some(country.ruler))
         })
         .map(|country| country.id)
         .collect();

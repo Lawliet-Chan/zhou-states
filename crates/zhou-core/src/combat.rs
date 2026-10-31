@@ -150,6 +150,11 @@ pub fn attack(
         (1..=config.combat.ranged_range).contains(&distance)
     } else {
         distance == 1
+            // 军队可能已由行军进入敌方治所，允许继续攻打脚下尚未失守的城中心。
+            || (distance == 0 && state.city_at(at).is_some_and(|id| {
+                let city = &state.cities[&id];
+                city.seat == at && hostile_city(state, city, actor)
+            }))
     };
     if !in_range {
         return Err(CommandError::OutOfRange(at));
@@ -413,8 +418,8 @@ fn bury(state: &mut GameState, config: &Config, ids: &[Id], events: &mut Vec<Eve
     }
 }
 
-/// 城中心被打下来：城被攻占。占领者用它的府库、收税、征兵，但没有所有权；
-/// 原来的管理者失去管理权，占领者要在当回合选一个人物或者士人来接管。原所有者打回来就收复。
+/// 城中心被打下来：所有权立即归攻占者，旧封授、纳贡和通行关系解除。
+/// 原来的管理者失去管理权，占领者要选一个人物或者士人来接管。
 /// 只有军队实际进入已失守的城中心，才能占领；远程破坏不改变归属。
 pub(crate) fn capture_on_entry(
     state: &mut GameState,
@@ -470,15 +475,24 @@ fn capture(state: &mut GameState, config: &Config, city_id: Id, by: Id, events: 
         );
         return;
     }
+    let former_owner = city.owner;
+    city.owner = Some(by);
+    city.liege = None;
+    city.tribute = None;
+    city.tribute_shortfall_years = 0;
+    city.passage.clear();
     city.status = CityStatus::Occupied;
     city.occupier = Some(by);
     city.manager = None;
     city.quota = None;
     events.push(
-        Event::new(format!("{by_name}攻占了{}，要在本回合选人接管", city.name))
-            .to([by])
-            .to(city.owner)
-            .at(city.seat),
+        Event::new(format!(
+            "{by_name}攻占了{}并取得所有权，须选人接管",
+            city.name
+        ))
+        .to([by])
+        .to(former_owner)
+        .at(city.seat),
     );
 }
 
@@ -491,7 +505,7 @@ pub enum Appointee {
 }
 
 /// 占领者选人接管被攻占的城。人物要是占领者自己或者同一国的人，并且没有在管别的城；
-/// 士人要从占领者自己管理的城里出，不能正在主事工事。城中人群对新管理者的初始忠诚度：
+/// 士人要从占领者自己管理的城里出，上任时终止他正在主事的工事。城中人群对新管理者的初始忠诚度：
 /// 管理者风评越高越忠诚；对旧主越不忠诚，对新管理者越忠诚。
 pub fn appoint_occupation_manager(
     state: &mut GameState,
@@ -539,21 +553,17 @@ pub fn appoint_occupation_manager(
                 .officials
                 .get(shi)
                 .ok_or(CommandError::NoSuchOfficial(*shi))?;
-            if home.assignment_of(*shi).is_some() {
-                return Err(CommandError::OfficialBusy(*shi));
-            }
             // 出仕：离开原来的城，成为有名字的人物，随占领者的国籍
             let mut character = Character::new(0, official.name.clone(), "none", Fx::ZERO);
             character.nationality = nationality(actor);
             let id = state.alloc_id();
             character.id = id;
             state.characters.insert(id, character);
-            state
-                .cities
-                .get_mut(from)
-                .expect("checked")
-                .officials
-                .remove(shi);
+            let home = state.cities.get_mut(from).expect("checked");
+            // 与取消工事一致，释放劳力并终止该士人主持的工事。
+            home.assignments
+                .retain(|_, assignment| assignment.shi != *shi);
+            home.officials.remove(shi);
             id
         }
     };

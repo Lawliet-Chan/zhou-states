@@ -4309,7 +4309,7 @@ fn cities_fall_after_the_wall_and_the_center_are_broken() {
     // 原来的管理者失去管理权，占领者要选人接管
     assert_eq!(
         (c.owner, c.occupier, c.manager),
-        (Some(other), Some(ids.player), None)
+        (Some(ids.player), Some(ids.player), None)
     );
     assert_eq!(state.armies[&army].pos, Hex::new(5, 0));
     let appoint = |appointee| Command::AppointOccupationManager { city, appointee };
@@ -4445,8 +4445,10 @@ fn cities_fall_after_the_wall_and_the_center_are_broken() {
     )
     .unwrap();
     let c = &state.cities[&city];
-    assert_eq!(c.status, zhou_core::state::CityStatus::Ruled);
-    assert_eq!(c.manager, Some(other));
+    assert_eq!(c.status, zhou_core::state::CityStatus::Occupied);
+    assert_eq!(c.owner, Some(other));
+    assert_eq!(c.occupier, Some(other));
+    assert_eq!(c.manager, None);
 }
 
 struct Demo {
@@ -5029,6 +5031,15 @@ fn ranged_destruction_requires_entry_into_city_center() {
     .unwrap();
     assert!(state.cities[&city].center_damage >= config.siege.center_hp);
     assert_eq!(state.cities[&city].occupier, None);
+    let snapshot = zhou_core::turn::snapshot(&state, &config);
+    let visible = zhou_core::player_report(&state, &config, &snapshot, ids.player);
+    let target = visible
+        .foreign_cities
+        .iter()
+        .find(|c| c.sighting.id == city)
+        .unwrap();
+    assert_eq!(target.sighting.center_remaining, Some(Fx::ZERO));
+    assert_eq!(target.sighting.wall_remaining, Some(Fx::ZERO));
     assert_eq!(state.armies[&army].pos, Hex::new(3, 0));
     end_turn_fed(&mut state, &config);
     // 已摧毁的中心必须由军队走入，才能触发占领。
@@ -5090,6 +5101,8 @@ fn royal_capital_is_a_landmark_without_revealing_neighbors() {
         .find(|c| c.sighting.id == capital)
         .unwrap();
     assert!(landmark.public_landmark);
+    assert_eq!(landmark.sighting.center_remaining, None);
+    assert_eq!(landmark.sighting.wall_remaining, None);
     assert!(!landmark.visible);
     assert_eq!(landmark.sighting.tiles, vec![Hex::new(30, 0)]);
     assert!(report.map.iter().any(|c| c.pos == Hex::new(30, 0)));
@@ -5146,4 +5159,26 @@ fn march_forecast_does_not_disclose_unexplored_route() {
     assert!(plan.uncertain);
     assert!(plan.path.iter().all(|h| seen.contains(h)));
     assert!(plan.stops.iter().all(|s| seen.contains(&s.at)));
+}
+
+#[test]
+fn army_inside_enemy_center_can_finish_the_siege() {
+    let config = config();
+    let (mut state, ids, army, other) = war_on_corridor(&config);
+    let seat = Hex::new(5, 0);
+    let city = enemy_city(&mut state, &ids, other, seat);
+    state.cities.get_mut(&city).unwrap().wall_damage = config.siege.wall_hp;
+    state.armies.get_mut(&army).unwrap().pos = seat;
+    let attack = Command::Attack {
+        army,
+        at: seat,
+        ranged: false,
+    };
+    apply(&mut state, &config, ids.player, &attack).unwrap();
+    assert!(state.cities[&city].center_damage > Fx::ZERO);
+    assert_eq!(state.cities[&city].occupier, None);
+    end_turn_fed(&mut state, &config);
+    state.cities.get_mut(&city).unwrap().center_damage = config.siege.center_hp - Fx::milli(1);
+    apply(&mut state, &config, ids.player, &attack).unwrap();
+    assert_eq!(state.cities[&city].occupier, Some(ids.player));
 }

@@ -409,6 +409,21 @@ func _draw() -> void:
 		if landmark:
 			label += " · 周王室都城"
 		_text(font, to_screen(hex_to_px(h)) + Vector2(0, 29), label, 17, Color("#8b969d") if remembered else Color.WHITE, true)
+		var at := to_screen(hex_to_px(h))
+		var defense := Game.city_defenses(city)
+		var offset := -35.0
+		for kind in ["wall", "center"]:
+			if defense.get(kind) == null:
+				continue
+			var maximum := int(Game.config.siege.wall_hp if kind == "wall" else Game.config.siege.center_hp)
+			var remaining := int(defense[kind])
+			var width := 66
+			draw_rect(Rect2(at + Vector2(-width / 2.0, offset), Vector2(width, 6)), Color("#151e25"))
+			draw_rect(Rect2(at + Vector2(-width / 2.0, offset), Vector2(float(width * remaining / maxi(1, maximum)), 6)), Color("#98c5df") if kind == "wall" else Color("#e0a063"))
+			offset -= 10
+		if city.get("occupier") != null:
+			_text(font, at + Vector2(0, 48), "已占领" if int(city.occupier) == Game.me else "被占领", 15, Color("#f5da8d"), true)
+
 	for h in Game.armies_at:
 		var entries: Array = Game.armies_at[h]
 		for i in entries.size():

@@ -52,6 +52,11 @@ pub struct CitySighting {
     /// 有没有城墙；城墙破了没有
     pub wall: bool,
     pub wall_broken: bool,
+    /// 可见城防血量；旧存档没有这些字段时为未知，不假装满血。
+    #[serde(default)]
+    pub wall_remaining: Option<crate::fx::Fx>,
+    #[serde(default)]
+    pub center_remaining: Option<crate::fx::Fx>,
     pub turn: u32,
 }
 
@@ -130,6 +135,10 @@ pub fn glimpse(state: &GameState, config: &Config, city: &City) -> CitySighting 
         size,
         wall: city.wall_hp(config).is_some(),
         wall_broken: city.wall_hp(config).is_some() && !city.wall_standing(config),
+        wall_remaining: city.wall_hp(config),
+        center_remaining: Some(
+            (config.siege.center_hp - city.center_damage).max(crate::fx::Fx::ZERO),
+        ),
         turn: state.turn,
     }
 }

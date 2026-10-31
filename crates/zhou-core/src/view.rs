@@ -132,6 +132,8 @@ pub fn player_report(
             landmark.size.clear();
             landmark.wall = false;
             landmark.wall_broken = false;
+            landmark.wall_remaining = None;
+            landmark.center_remaining = None;
             sightings.insert(*id, landmark);
         }
     }
@@ -145,6 +147,11 @@ pub fn player_report(
         .map(|c| {
             let full = report.cities.iter().find(|r| r.id == c.id);
             let mut sighting = c.clone();
+            if c.tiles.iter().any(|p| vision.contains(p))
+                && let Some(city) = state.cities.get(&c.id)
+            {
+                sighting = crate::vision::glimpse(state, config, city);
+            }
             sighting
                 .tiles
                 .retain(|p| explored.contains(p) || (capitals.contains(&c.id) && *p == c.seat));

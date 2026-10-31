@@ -351,3 +351,20 @@ func commandable_cities() -> Array:
 		elif c.owner != null and int(c.owner) == me:
 			out.append(c)
 	return out
+
+
+## 外城只在当前可见时返回血量；历史记录和公共地标不能提供实时进度。
+func city_defenses(c: Dictionary) -> Dictionary:
+	if my_cities.has(int(c.id)):
+		return {"wall": c.wall, "center": c.center}
+	if bool(c.get("public_landmark", false)) or not bool(c.get("visible", false)):
+		return {}
+	return {"wall": c.get("wall_remaining"), "center": c.get("center_remaining")}
+
+func city_control_text(c: Dictionary) -> String:
+	var occupier = c.get("occupier")
+	if occupier != null:
+		return "已占领 · 我方控制" if int(occupier) == me else "已被%s占领" % person_name(occupier)
+	if c.get("owner") != null and int(c.owner) == me:
+		return "我方城邑"
+	return "尚未占领"

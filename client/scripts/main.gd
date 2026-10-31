@@ -8,6 +8,8 @@ const PANEL_WIDTH := 400
 var domestic = preload("res://scripts/domestic.gd").new(self)
 
 var _known_occupiers := {}
+var _known_defenses := {}
+var _siege_targets := {}
 var _city_tabs := {}
 var command_feedback: Label
 var map_view: Control
@@ -313,9 +315,19 @@ func _on_view_changed() -> void:
 	var v := Game.view
 	for city in Game.my_cities.values() + Game.foreign_cities.values():
 		var cid := int(city.id)
+		var defense := Game.city_defenses(city)
+		if _known_defenses.has(cid) and not defense.is_empty():
+			for kind in ["wall", "center"]:
+				var before = _known_defenses[cid].get(kind)
+				var after = defense.get(kind)
+				if before != null and after != null and int(after) < int(before):
+					command_feedback.text = "%s · %s减少%s，剩余%s" % [city.name, "城墙" if kind == "wall" else "城中心", Game.fx(int(before) - int(after)), Game.fx(int(after))]
+					command_feedback.modulate = Color("#e8c66a")
+		if not defense.is_empty():
+			_known_defenses[cid] = defense
 		var occupier = city.get("occupier")
 		if _known_occupiers.has(cid) and occupier != null and _known_occupiers[cid] != occupier:
-			command_feedback.text = "城邑已被占领：%s · 占领者 %s" % [city.name, Game.person_name(occupier)]
+			command_feedback.text = "已占领%s！军事占领已成立。" % city.name if int(occupier) == Game.me else "%s已被%s占领" % [city.name, Game.person_name(occupier)]
 			command_feedback.modulate = Color("#e8c66a")
 		_known_occupiers[cid] = occupier
 	date_label.text = "第 %d 回合　%d 年 %d 月（%s）" % [int(v.turn), int(v.year), int(v.month), str(v.season)]
@@ -385,6 +397,7 @@ func _on_hex_clicked(h: Vector2i) -> void:
 	if target_mode != "":
 		var army := int(sel.get("id", -1))
 		var ranged := target_mode == "ranged"
+		_siege_targets[army] = int(Game.tile_city.get(h, -1))
 		_set_target_mode("")
 		Game.send_command({"type": "attack", "army": army, "at": Game.hd(h), "ranged": ranged},
 			"军队 %d %s %s" % [army, "远程攻击" if ranged else "攻击", _hex_text(h)])
@@ -464,7 +477,7 @@ func _hex_text(h: Vector2i) -> String:
 	var name := Game.cname("terrains", c.terrain) if c != null else "?"
 	if Game.tile_city.has(h):
 		name = Game.city_name(Game.tile_city[h]) + "·" + name
-	return name + Game.hex_label(h)
+	return name
 
 
 # ---------------------------------------------------------------- 详情面板
@@ -510,7 +523,7 @@ func _cell_detail(h: Vector2i) -> void:
 	if c == null:
 		return
 	var t: Dictionary = Game.config.terrains.get(str(c.terrain), {})
-	_header(detail, "%s　%s" % [Game.cname("terrains", c.terrain), Game.hex_label(h)])
+	_header(detail, Game.cname("terrains", c.terrain))
 	if Game.tile_city.has(h):
 		_kv(detail, "属于", Game.city_name(Game.tile_city[h]))
 	else:
@@ -535,9 +548,36 @@ func _back_button() -> void:
 		_refresh_detail())
 
 
+## 血条数值直接取服务器报告，最大值取登录配置。
+func _defense_bar(box: Node, title: String, remaining: int, maximum: int) -> void:
+	_kv(box, title, "%s / %s" % [Game.fx(remaining), Game.fx(maximum)])
+	var bar := ProgressBar.new()
+	bar.max_value = maxi(1, maximum)
+	bar.value = remaining
+	bar.show_percentage = false
+	bar.custom_minimum_size.y = 12
+	box.add_child(bar)
+
+func _city_siege_status(c: Dictionary, box: Node) -> void:
+	_section(box, Game.city_control_text(c))
+	var defense := Game.city_defenses(c)
+	if defense.is_empty():
+		return
+	if defense.get("wall") != null:
+		_defense_bar(box, "城墙", int(defense.wall), int(Game.config.siege.wall_hp))
+	if defense.get("center") != null:
+		_defense_bar(box, "城中心", int(defense.center), int(Game.config.siege.center_hp))
+		if int(defense.center) == 0 and c.get("occupier") == null:
+			_note(box, "城中心已失守，清除守军后由军队进入城中心才能占领。")
+	if c.get("occupier") != null and int(c.occupier) == Game.me:
+		_note(box, "已攻占，所有权归攻占者；须派遣接管者。")
+
 func _city_detail(c: Dictionary) -> void:
 	var id := int(c.id)
 	_header(detail, "%s" % c.name)
+	_city_siege_status(c, detail)
+	if c.occupier != null and int(c.occupier) == Game.me:
+		_btn(_buttons(detail), "派遣接管者", _occupation_dialog.bind(int(c.id)))
 	_kv(detail, "所有者", Game.person_name(c.owner))
 	_kv(detail, "管理者", Game.person_name(c.manager))
 	_kv(detail, "国家", Game.country_name(c.country))
@@ -546,7 +586,6 @@ func _city_detail(c: Dictionary) -> void:
 	if c.occupied:
 		_kv(detail, "被攻占", "占领者 %s" % Game.person_name(c.occupier))
 	_kv(detail, "人口", "%d / %d" % [int(c.population), int(c.housing)])
-	_kv(detail, "城防", "城墙 %s　城中心 %s" % ["无" if c.wall == null else Game.fx(c.wall), Game.fx(c.center)])
 	_kv(detail, "士人", "%d（闲 %d）" % [c.officials.size(), int(c.idle_officials)])
 	if int(c.neighbor_bonus) > 0:
 		_kv(detail, "邻城增益", "+%d%%" % Game.pct(c.neighbor_bonus))
@@ -744,6 +783,9 @@ func _foreign_city_detail(c: Dictionary) -> void:
 		_back_button()
 		return
 	_header(detail, "%s（%s）" % [c.name, c.size])
+	_city_siege_status(c, detail)
+	if c.occupier != null and int(c.occupier) == Game.me:
+		_btn(_buttons(detail), "派遣接管者", _occupation_dialog.bind(int(c.id)))
 	_kv(detail, "所有者", Game.person_name(c.owner))
 	_kv(detail, "国家", Game.country_name(c.country))
 	if c.occupier != null:
@@ -780,6 +822,11 @@ func _army_detail(a) -> void:
 		var s: Dictionary = a.supply
 		_kv(detail, "粮道", "从%s，辎重 %d 人%s" % [Game.city_name(s.from), int(s.convoy), "，找不到路！" if s.path.is_empty() else ""])
 
+	var target_id := int(_siege_targets.get(id, -1))
+	var target_city = Game.my_cities.get(target_id, Game.foreign_cities.get(target_id))
+	if target_city != null:
+		_section(detail, "攻城目标 · %s" % target_city.name)
+		_city_siege_status(target_city, detail)
 	_section(detail, "兵")
 	for s in a.squads:
 		var extra := "" if s.gear.is_empty() else "　带 " + Game.inv_text(s.gear)
@@ -806,9 +853,17 @@ func _army_detail(a) -> void:
 	var h := Game.hx(a.pos)
 	if Game.tile_city.has(h):
 		var cid := int(Game.tile_city[h])
+		var city = Game.my_cities.get(cid, Game.foreign_cities.get(cid))
+		if city != null:
+			if int(_siege_targets.get(id, -1)) != cid:
+				_city_siege_status(city, detail)
+			if Game.hx(city.seat) == h and city.get("occupier") == null and Game.city_owner(cid) != Game.me:
+				_note(detail, "军队已进入城中心，但尚未占领；仍须满足城防归零、守军清除的条件。")
+
 		var occ = Game.city_occupier(cid)
 		if occ != null and int(occ) == Game.me:
 			_section(detail, "占领%s" % Game.city_name(cid))
+			_btn(_buttons(detail), "派遣接管者", _occupation_dialog.bind(cid))
 			var pa := _buttons(detail)
 			_btn(pa, "劫掠府库", func(): Game.send_command({"type": "plunder", "city": cid, "target": "treasury"}, "劫掠%s府库" % Game.city_name(cid)))
 			_btn(pa, "劫掠民间", func(): Game.send_command({"type": "plunder", "city": cid, "target": "citizens"}, "劫掠%s民间" % Game.city_name(cid)))
@@ -1108,3 +1163,25 @@ func _style_turn_button() -> void:
 		style.set_corner_radius_all(80)
 		end_turn_btn.add_theme_stylebox_override(state, style)
 	end_turn_btn.add_theme_font_size_override("font_size", 24)
+
+
+func _occupation_dialog(cid: int) -> void:
+	var dv := _dialog("派遣接管者")
+	var d: ConfirmationDialog = dv[0]
+	var v: VBoxContainer = dv[1]
+	_note(v, "士人须来自自己管理的城市；上任时会离开原城，并终止正在主持的工事。人物不能已管理另一座城。")
+	var choices: Array = []
+	var opt := OptionButton.new()
+	for id in Game.characters:
+		choices.append({"kind": "character", "id": int(id)})
+		opt.add_item(Game.person_name(id))
+	for city in Game.my_cities.values():
+		if city.manager == null or int(city.manager) != Game.me:
+			continue
+		for shi in city.officials:
+			choices.append({"kind": "shi", "city": int(city.id), "shi": int(shi.id)})
+			opt.add_item("%s · %s的士人" % [shi.name, city.name])
+	_row(v, "接管者", opt)
+	d.get_ok_button().disabled = choices.is_empty()
+	d.confirmed.connect(func(): Game.send_command({"type": "appoint_occupation_manager", "city": cid, "appointee": choices[opt.selected]}, "派遣接管者"))
+	_popup(d)
