@@ -7,6 +7,8 @@ const PANEL_WIDTH := 400
 
 var domestic = preload("res://scripts/domestic.gd").new(self)
 
+var _known_occupiers := {}
+var command_feedback: Label
 var map_view: Control
 var login_box: Control
 var game_box: Control
@@ -27,7 +29,6 @@ var tabs: TabContainer
 var sel := {}
 ## 选目标：""、"attack"、"ranged"
 var target_mode := ""
-var force_march := false
 
 var _logged_turn := -1
 var _logged_count := 0
@@ -47,6 +48,10 @@ func _ready() -> void:
 	Game.waiting_changed.connect(_on_waiting_changed)
 	Game.turn_ended.connect(_on_turn_ended)
 	Game.command_result.connect(_on_command_result)
+	Game.march_confirmation.connect(func(command: Dictionary, cities: Array, desc: String):
+		_confirm("你无权经过%s。硬闯等于向城邑控制者宣战，是否继续？" % "、".join(cities), func():
+			command.force = true
+			Game.send_command(command, desc)))
 	Game.server_error.connect(func(m): _log("[color=#ff8080]服务器：%s[/color]" % m))
 	# 命令行（联调用）：-- --server=ws://... --player=3 自动登录；
 	# --cmd='{"type":...}' 登录后下指令（可以写多个）；--select=q,r 选中一格；--press=按钮文字 按下详情里的按钮；
@@ -134,6 +139,10 @@ func _build_game() -> void:
 	end_turn_btn.toggled.connect(func(on): Game.end_turn(on))
 	map_view = $Game/Middle/Map/View
 	hint_label = $Game/Middle/Map/Hint
+	command_feedback = Label.new()
+	command_feedback.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	command_feedback.text = "选择城邑查看治理情况，选择军队下达行动。"
+	$Game/Middle/Map.add_child(command_feedback)
 	map_view.hex_clicked.connect(_on_hex_clicked)
 	map_view.hex_right_clicked.connect(_on_hex_right_clicked)
 	tabs = $Game/Middle/RightPanel
@@ -281,6 +290,13 @@ func _find_button(node: Node, text: String) -> Button:
 
 func _on_view_changed() -> void:
 	var v := Game.view
+	for city in Game.my_cities.values() + Game.foreign_cities.values():
+		var cid := int(city.id)
+		var occupier = city.get("occupier")
+		if _known_occupiers.has(cid) and occupier != null and _known_occupiers[cid] != occupier:
+			command_feedback.text = "城邑已被占领：%s · 占领者 %s" % [city.name, Game.person_name(occupier)]
+			command_feedback.modulate = Color("#e8c66a")
+		_known_occupiers[cid] = occupier
 	date_label.text = "第 %d 回合　%d 年 %d 月（%s）" % [int(v.turn), int(v.year), int(v.month), str(v.season)]
 	var ch = v.character
 	if ch != null:
@@ -309,6 +325,8 @@ func _on_turn_ended(report: Dictionary) -> void:
 
 
 func _on_command_result(_req: int, ok: bool, ids: Array, error: String, desc: String) -> void:
+	command_feedback.text = "✓ %s：指令已执行" % desc if ok else "✗ %s：%s" % [desc, error]
+	command_feedback.modulate = Color("#9fd5b2") if ok else Color("#ffaaa0")
 	if ok:
 		var extra := "" if ids.is_empty() else "（新编号 %s）" % ", ".join(ids.map(func(x): return str(int(x))))
 		_log("[color=#9fd89f]✓ %s%s[/color]" % [desc, extra])
@@ -372,8 +390,8 @@ func _on_hex_right_clicked(h: Vector2i) -> void:
 	if sel.get("kind") != "army" or not Game.cells.has(h):
 		return
 	var army := int(sel.id)
-	Game.send_command({"type": "march_army", "army": army, "to": Game.hd(h), "force": force_march},
-		"军队 %d 行军到 %s%s" % [army, _hex_text(h), "（硬闯）" if force_march else ""])
+	Game.send_command({"type": "march_army", "army": army, "to": Game.hd(h), "force": false},
+		"军队 %d 行军到 %s" % [army, _hex_text(h)])
 
 
 func _select(s: Dictionary) -> void:
@@ -416,7 +434,7 @@ func _set_target_mode(mode: String) -> void:
 					map_view.highlight[h] = Color("#ff5a4a")
 		hint_label.text = "点一格作为攻击目标，右键取消"
 	else:
-		hint_label.text = "左键选中（同一格连点轮换），右键让选中的军队行军，拖动平移，滚轮缩放"
+		hint_label.text = "左键选中（同一格连点轮换），右键让选中的军队行军，拖动平移，滚轮缩放，Alt 拖动旋转"
 	map_view.queue_redraw()
 
 
@@ -512,6 +530,7 @@ func _city_detail(c: Dictionary) -> void:
 	if int(c.neighbor_bonus) > 0:
 		_kv(detail, "邻城增益", "+%d%%" % Game.pct(c.neighbor_bonus))
 
+	var governance_start := detail.get_child_count()
 	var acts := _buttons(detail)
 	var here = Game.view.character.location if Game.view.character != null else null
 	_btn(acts, "搬到这里", func(): Game.send_command({"type": "move_to", "city": id}, "搬到%s" % c.name), here != null and int(here) == id)
@@ -522,6 +541,7 @@ func _city_detail(c: Dictionary) -> void:
 	_city_management(c)
 	_city_fief(c)
 
+	var economy_start := detail.get_child_count()
 	_section(detail, "府库")
 	_note(detail, Game.inv_text(c.treasury))
 	_section(detail, "民间财富")
@@ -535,7 +555,9 @@ func _city_detail(c: Dictionary) -> void:
 			parts.append("%s ×%d" % [Game.cname("buildings", k), int(c.buildings[k])])
 		_note(detail, "、".join(parts))
 
+	var officials_start := detail.get_child_count()
 	domestic.officials(c, detail)
+	var people_start := detail.get_child_count()
 	_section(detail, "人群")
 	for g in c.groups:
 		var skills: Array = g.skills.map(func(s): return Game.cname("skills", s))
@@ -563,6 +585,24 @@ func _city_detail(c: Dictionary) -> void:
 		_section(detail, "学技能")
 		for l in c.learning:
 			_note(detail, "%d 人学习%s，已学 %d 回合" % [int(l.count), Game.cname("skills", l.skill), int(l.turns)])
+	# 保留总览，把详细内容按治理任务分组，减少长控制板。
+	var children := detail.get_children()
+	var city_tabs := TabContainer.new()
+	city_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail.add_child(city_tabs)
+	var groups := [
+		["治理", governance_start, economy_start],
+		["经济", economy_start, officials_start],
+		["士人", officials_start, people_start],
+		["人群与工事", people_start, children.size()],
+	]
+	for group in groups:
+		var content := VBoxContainer.new()
+		content.name = group[0]
+		content.add_theme_constant_override("separation", 8)
+		city_tabs.add_child(content)
+		for i in range(group[1], group[2]):
+			children[i].reparent(content)
 	_back_button()
 
 
@@ -692,6 +732,7 @@ func _foreign_city_detail(c: Dictionary) -> void:
 	if c.occupier != null:
 		_kv(detail, "被攻占", "占领者 %s" % Game.person_name(c.occupier))
 	_kv(detail, "城墙", "已破" if c.wall_broken else ("有" if c.wall else "无"))
+	_note(detail, "攻占流程：破城墙 → 清除守军 → 攻打城中心。城中心血量归零后须军队进入城中心才算占领，远程攻击不能占领；选择军队后点击攻击，再选择该城的地块。")
 	_kv(detail, "消息", "眼下看得到" if c.visible else "第 %d 回合所见" % int(c.turn))
 	if c.fief != null:
 		_vassal_city(c)
@@ -711,6 +752,7 @@ func _army_detail(a) -> void:
 	_kv(detail, "位置", _hex_text(Game.hx(a.pos)))
 	_kv(detail, "目的地", "无" if a.dest == null else _hex_text(Game.hx(a.dest)))
 	_kv(detail, "行军力", int(a.moves_left))
+	_kv(detail, "城墙驻守", "驻守中" if a.on_wall else "未驻守")
 	_kv(detail, "出征", "是（要靠粮道供粮）" if a.on_campaign else "否（在自己的城的地上）")
 	if int(a.hunger) > 0:
 		_kv(detail, "断粮", "%d 回合，战斗力剩 %d%%" % [int(a.hunger), Game.pct(a.strength)])
@@ -725,18 +767,15 @@ func _army_detail(a) -> void:
 
 	_section(detail, "号令")
 	_note(detail, "右键地图上的一格行军；走不到的回合会接着走。")
-	var fm := CheckBox.new()
-	fm.text = "硬闯（穿过没有通行权的城，等于宣战）"
-	fm.button_pressed = force_march
-	fm.toggled.connect(func(on): force_march = on)
-	detail.add_child(fm)
+	_note(detail, "攻占城邑：先破城墙、清除守军，再攻击城中心；城中心血量归零后，军队必须进入城中心才算占领，远程攻击不能占领。")
 	var acts := _buttons(detail)
 	_btn(acts, "攻击", _set_target_mode.bind("attack"))
 	_btn(acts, "远程攻击", _set_target_mode.bind("ranged"))
 	if a.dest != null:
 		_btn(acts, "停止行军", func(): Game.send_command({"type": "march_army", "army": id, "to": a.pos}, "军队 %d 停止行军" % id))
-	_btn(acts, "上城墙", func(): Game.send_command({"type": "man_wall", "army": id, "on": true}, "军队 %d 上城墙" % id))
-	_btn(acts, "下城墙", func(): Game.send_command({"type": "man_wall", "army": id, "on": false}, "军队 %d 下城墙" % id))
+	var on_wall: bool = a.on_wall
+	var wall_action := "撤离城墙" if on_wall else "驻守城墙"
+	_btn(acts, wall_action, func(): Game.send_command({"type": "man_wall", "army": id, "on": not on_wall}, "军队 %d %s" % [id, wall_action]))
 	if a.supply == null:
 		_btn(acts, "开粮道", _supply_dialog.bind(a))
 	else:

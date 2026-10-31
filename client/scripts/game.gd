@@ -7,6 +7,7 @@ signal view_changed
 signal waiting_changed
 signal turn_ended(report: Dictionary)
 signal command_result(req: int, ok: bool, ids: Array, error: String, desc: String)
+signal march_confirmation(command: Dictionary, cities: Array, desc: String)
 signal server_error(message: String)
 
 var me := -1
@@ -31,6 +32,7 @@ var characters := {}      # id → 人物（含自己）
 var countries := {}       # id → Country
 
 var _req := 0
+var _pending_commands := {}
 var _pending := {}  # req → 指令的说明
 
 
@@ -45,6 +47,7 @@ func login(player: int) -> void:
 ## 下指令，返回 req。`desc` 是给日志看的说明
 func send_command(cmd: Dictionary, desc := "") -> int:
 	_req += 1
+	_pending_commands[_req] = cmd.duplicate(true)
 	_pending[_req] = desc if desc != "" else str(cmd.get("type", ""))
 	Net.send({"type": "command", "req": _req, "command": _ints(cmd)})
 	return _req
@@ -92,10 +95,18 @@ func _on_message(msg: Dictionary) -> void:
 			ready_ids = msg.ready.map(func(x): return int(x))
 			waiting_ids = msg.waiting.map(func(x): return int(x))
 			waiting_changed.emit()
+		"march_confirmation":
+			var req := int(msg.req)
+			var command: Dictionary = _pending_commands.get(req, {})
+			var desc: String = _pending.get(req, "行军")
+			_pending_commands.erase(req)
+			_pending.erase(req)
+			march_confirmation.emit(command, msg.cities, desc)
 		"result":
 			var req := int(msg.req)
 			var desc: String = _pending.get(req, "")
 			_pending.erase(req)
+			_pending_commands.erase(req)
 			var err = msg.get("error")
 			command_result.emit(req, bool(msg.ok), msg.get("ids", []), "" if err == null else str(err), desc)
 		"error":

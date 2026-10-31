@@ -473,14 +473,30 @@ pub fn order_march(
         return Err(CommandError::NotCommander(army_id));
     }
     let mut planned = army.clone();
-    planned.force = force;
-    if to != army.pos
-        && state
+    // 由权威规则计算路线和通行权，客户端只负责确认，不自行寻路。
+    planned.force = true;
+    if to != army.pos {
+        let path = state
             .map
             .shortest_path(army.pos, to, |p| step_cost(state, config, &planned, p))
-            .is_none()
-    {
-        return Err(CommandError::NoPath(to));
+            .ok_or(CommandError::NoPath(to))?;
+        if !force {
+            let mut cities = Vec::new();
+            for pos in path {
+                if !state.can_pass(actor, pos, false)
+                    && let Some(id) = state.city_at(pos)
+                    && state.cities[&id]
+                        .holder()
+                        .is_some_and(|h| !state.at_war(actor, h))
+                    && !cities.contains(&id)
+                {
+                    cities.push(id);
+                }
+            }
+            if !cities.is_empty() {
+                return Err(CommandError::PassageConfirmation(cities));
+            }
+        }
     }
     let army = state.armies.get_mut(&army_id).expect("checked above");
     army.dest = (to != army.pos).then_some(to);
@@ -521,6 +537,11 @@ pub fn march(state: &mut GameState, config: &Config, army_id: Id, events: &mut V
             return;
         }
         let cost = step_cost(state, config, army, next).expect("on the path");
+        let army = &state.armies[&army_id];
+        let full = army.moves(config);
+        if army.moves_left == 0 || (army.moves_left < cost && army.moves_left < full) {
+            return;
+        }
         // 硬闯没有通行权的城：对城主宣战，宣不了战就停下
         let holder = state.city_at(next).and_then(|c| state.cities[&c].holder());
         if !state.can_pass(army.commander, next, false)
@@ -536,11 +557,6 @@ pub fn march(state: &mut GameState, config: &Config, army_id: Id, events: &mut V
                 return;
             }
         }
-        let army = &state.armies[&army_id];
-        let full = army.moves(config);
-        if army.moves_left == 0 || (army.moves_left < cost && army.moves_left < full) {
-            return;
-        }
         let army = state.armies.get_mut(&army_id).expect("exists");
         army.pos = next;
         army.on_wall = false;
@@ -548,6 +564,7 @@ pub fn march(state: &mut GameState, config: &Config, army_id: Id, events: &mut V
         if next == dest {
             army.dest = None;
         }
+        crate::combat::capture_on_entry(state, config, army_id, events);
         // 走到敌军旁边就停下，直接开打
         if crate::combat::engage(state, config, army_id, events) {
             return;

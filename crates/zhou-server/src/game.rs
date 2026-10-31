@@ -59,6 +59,11 @@ pub enum ServerMsg {
         ids: Vec<Id>,
         error: Option<String>,
     },
+    /// 行军尚未执行，需要确认无通行权的城邑。
+    MarchConfirmation {
+        req: u64,
+        cities: Vec<String>,
+    },
     /// 回合中情况有变（有人下了指令）：最新的情况
     View {
         view: Box<PlayerReport>,
@@ -168,6 +173,16 @@ impl Game {
                         out.extend(self.push_views());
                         out
                     }
+                    Err(zhou_core::command::CommandError::PassageConfirmation(cities)) => vec![(
+                        conn,
+                        ServerMsg::MarchConfirmation {
+                            req,
+                            cities: cities
+                                .iter()
+                                .map(|id| self.state.cities[id].name.clone())
+                                .collect(),
+                        },
+                    )],
                     Err(e) => vec![(
                         conn,
                         ServerMsg::Result {

@@ -509,6 +509,8 @@ pub enum CommandError {
     NoBuildingSlot,
     #[error("「{0}」不能建在这种地上")]
     WrongTerrain(String),
+    #[error("行军路线经过无通行权的城邑，硬闯等于宣战：{0:?}")]
+    PassageConfirmation(Vec<Id>),
     #[error("城里没有城墙")]
     NoWall,
     #[error("城墙完好，不用修")]

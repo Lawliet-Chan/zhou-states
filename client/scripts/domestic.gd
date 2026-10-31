@@ -40,7 +40,6 @@ func group_actions(c: Dictionary, g: Dictionary, box: Node) -> void:
 	if not can_manage(c):
 		return
 	var row = ui._buttons(box)
-	ui._btn(row, "任用士人·%s" % g.name, people_dialog.bind(c, g, "appoint_shi"))
 	ui._btn(row, "学技能·%s" % g.name, people_dialog.bind(c, g, "learn_skill"))
 	ui._btn(row, "调技能·%s" % g.name, arrange_dialog.bind(c, g))
 
@@ -78,31 +77,41 @@ func tax_dialog(c: Dictionary) -> void:
 		send(c, "set_tax_rate", {"rate": raw / 100}, "调整税率"))
 	ui._popup(d)
 
-func people_dialog(c: Dictionary, g: Dictionary, kind: String) -> void:
-	var appoint := kind == "appoint_shi"
-	var dv = ui._dialog("任用士人" if appoint else "学习技能")
+func people_dialog(c: Dictionary, g: Dictionary, _kind: String) -> void:
+	var dv = ui._dialog("学习技能")
 	var d: ConfirmationDialog = dv[0]
 	var v: VBoxContainer = dv[1]
 	ui._note(v, "%s：%s" % [g.name, "、".join(g.skills.map(func(k): return Game.cname("skills", k)))])
-	var available := int(g.size) - int(g.managed) if appoint else available_learning(c, g)
-	var count := number(v, "人数", available, mini(1, available))
-	var skill: OptionButton
-	if not appoint:
-		var keys: Array = Game.config.skills.keys().filter(func(k): return not g.skills.has(k))
-		skill = choice(v, "学习", keys, keys.map(func(k): return Game.cname("skills", k)))
-		ui._note(v, "学习期间照常干活，学成后按新技能分组。")
+	var shi_skill := str(Game.config.shi.skill)
+	var keys: Array = Game.config.skills.keys().filter(func(k): return k != shi_skill and not g.skills.has(k))
+	# 学「士」沿用任用指令；已有士技能的人群也能从这里任用。
+	keys.append(shi_skill)
+	var skill := choice(v, "学习", keys, keys.map(func(k): return "%s（任用士人）" % Game.cname("skills", k) if k == shi_skill else Game.cname("skills", k)))
+	var count := number(v, "人数", available_learning(c, g), 1)
+	count.min_value = 1
+	var explanation := Label.new()
+	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(explanation)
+	var refresh := func():
+		var appoint: bool = selected(skill) == shi_skill
+		var available := maxi(0, int(g.size) - int(g.managed)) if appoint else available_learning(c, g)
+		count.max_value = maxi(1, available)
+		d.get_ok_button().disabled = available <= 0
+		explanation.text = "选中的人将成为士人，进入士人名单，可安排他们主持工事。" if appoint else "学习期间照常干活，学成后按新技能分组。"
+	skill.item_selected.connect(func(_index): refresh.call())
+	refresh.call()
 	var drop_keys: Array = [""]
 	drop_keys.append_array(g.skills)
 	var drop := choice(v, "丢弃旧技能", drop_keys, drop_keys.map(func(k): return "不丢弃" if k == "" else Game.cname("skills", k)))
 	ui._note(v, "技能槽上限 %d；满槽学习时需选一项旧技能丢弃。" % int(Game.config.population.max_skills))
-	d.get_ok_button().disabled = available <= 0 or (not appoint and skill.item_count == 0)
 	d.confirmed.connect(func():
+		var appoint: bool = selected(skill) == shi_skill
 		var fields := {"group": int(g.id), "count": int(count.value)}
 		if not appoint:
 			fields.skill = selected(skill)
 		if selected(drop) != "":
 			fields.drop_skill = selected(drop)
-		send(c, kind, fields, "任用士人" if appoint else "学习技能"))
+		send(c, "appoint_shi" if appoint else "learn_skill", fields, "任用士人" if appoint else "学习技能"))
 	ui._popup(d)
 
 func available_learning(c: Dictionary, g: Dictionary) -> int:

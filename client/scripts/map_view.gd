@@ -1,4 +1,4 @@
-## 地图：六边形按地形上色，城画图形加城名，军队画圆标加人数，视野外的格子变暗。
+## 三维地图与二维标注共用轴向坐标；高度只用于显示，不参与规则。
 ## 左键选中，右键发给 main 处理（行军），拖动平移，滚轮缩放。
 extends Control
 
@@ -36,35 +36,168 @@ var _drag_start := Vector2.ZERO
 var _centered := false
 
 
+var _viewport: SubViewport
+var _world: Node3D
+var _camera: Camera3D
+var _focus := Vector3.ZERO
+var _yaw := 0.0
+
+
 func _ready() -> void:
 	clip_contents = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	var container := SubViewportContainer.new()
+	container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	container.stretch = true
+	container.show_behind_parent = true
+	container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(container)
+	_viewport = SubViewport.new()
+	_viewport.own_world_3d = true
+	_viewport.transparent_bg = false
+	container.add_child(_viewport)
+	_world = Node3D.new()
+	_viewport.add_child(_world)
+	_camera = Camera3D.new()
+	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	_camera.far = 10000
+	_viewport.add_child(_camera)
+	var environment := WorldEnvironment.new()
+	var env := Environment.new()
+	env.background_mode = Environment.BG_COLOR
+	env.background_color = Color("#202c33")
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color("#dce7e9")
+	env.ambient_light_energy = 0.7
+	environment.environment = env
+	_viewport.add_child(environment)
+	var sun := DirectionalLight3D.new()
+	sun.rotation_degrees = Vector3(-55, -30, 0)
+	sun.light_energy = 1.2
+	_viewport.add_child(sun)
 	Game.view_changed.connect(_on_view_changed)
-	resized.connect(func(): if not _centered: center_map())
+	resized.connect(center_map)
+	_on_view_changed()
+
+
+func _height(h: Vector2i) -> float:
+	var terrain := str(Game.cells.get(h, {}).get("terrain", ""))
+	# 仅为地形表现高度，无游戏数值含义。
+	return float({"mountain": 25, "forest": 7, "water": -3, "river": -3}.get(terrain, 1))
+
+
+func _point(p: Vector2, height: float) -> Vector3:
+	return Vector3(p.x, height, p.y)
+
+
+func _material(color: Color) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	material.roughness = 0.95
+	return material
+
+
+func _mesh(mesh: Mesh, at: Vector3, color: Color) -> MeshInstance3D:
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.material_override = _material(color)
+	instance.position = at
+	_world.add_child(instance)
+	return instance
+
+
+func _box(at: Vector3, dimensions: Vector3, color: Color) -> void:
+	var mesh := BoxMesh.new()
+	mesh.size = dimensions
+	_mesh(mesh, at, color)
 
 
 func _on_view_changed() -> void:
+	if _world == null:
+		return
+	for child in _world.get_children():
+		_world.remove_child(child)
+		child.queue_free()
+	for h in Game.cells:
+		var terrain := str(Game.cells[h].terrain)
+		var color: Color = TERRAIN_COLORS.get(terrain, Color.GRAY)
+		if Game.tile_city.has(h):
+			color = color.lerp(Game.person_color(Game.city_owner(Game.tile_city[h])), 0.15)
+		if not Game.vision.has(h):
+			color = color.darkened(0.55)
+		var height := _height(h)
+		var tile := CylinderMesh.new()
+		tile.top_radius = HEX * 0.985
+		tile.bottom_radius = tile.top_radius
+		tile.height = height + 16
+		tile.radial_segments = 6
+		_mesh(tile, _point(hex_to_px(h), (height - 16) / 2), color)
+		if terrain == "forest":
+			for offset in [Vector2(-12, 3), Vector2(10, -8), Vector2(6, 15)]:
+				var tree := CylinderMesh.new()
+				tree.top_radius = 0
+				tree.bottom_radius = 10
+				tree.height = 23
+				tree.radial_segments = 5
+				_mesh(tree, _point(hex_to_px(h) + offset, height + 11), color.darkened(0.22))
+	for h in Game.seat_city:
+		var id: int = Game.seat_city[h]
+		var base := _point(hex_to_px(h), _height(h))
+		var color := Game.person_color(Game.city_owner(id))
+		if not Game.vision.has(h):
+			color = color.darkened(0.5)
+		_box(base + Vector3(0, 5, 0), Vector3(25, 10, 20), Color("#c8ba9b").lerp(color, 0.25))
+		_box(base + Vector3(0, 12, 0), Vector3(29, 4, 23), color)
+		var city = Game.my_cities.get(id, Game.foreign_cities.get(id))
+		if city != null and city.wall != null and city.wall != false:
+			for side in [-1, 1]:
+				_box(base + Vector3(side * 21, 5, 0), Vector3(4, 10, 44), Color("#8b806b"))
+				_box(base + Vector3(0, 5, side * 21), Vector3(44, 10, 4), Color("#8b806b"))
+		var occupier = Game.city_occupier(id)
+		_flag(base + Vector3(14, 0, -12), Game.person_color(occupier) if occupier != null else color)
+	for h in Game.armies_at:
+		var entries: Array = Game.armies_at[h]
+		for i in entries.size():
+			var entry: Dictionary = entries[i]
+			var color := Game.person_color(entry.data.commander)
+			if not entry.own and not entry.data.visible:
+				color = color.darkened(0.55)
+			_flag(_point(_army_pos(h, i, entries.size()), _height(h)), color)
 	if not _centered:
 		center_map()
+	_update_camera()
+
+
+func _flag(base: Vector3, color: Color) -> void:
+	_box(base + Vector3(0, 13, 0), Vector3(1.5, 26, 1.5), Color("#46382a"))
+	_box(base + Vector3(6, 22, 0), Vector3(12, 8, 1), color)
+
+
+func _update_camera() -> void:
+	if _camera == null or size.y < 1:
+		return
+	_camera.size = size.y / zoom
+	_camera.position = _focus + Vector3(sin(_yaw) * 1000, 1100, cos(_yaw) * 1000)
+	_camera.look_at(_focus)
 	queue_redraw()
 
 
 func center_map() -> void:
 	if Game.cells.is_empty() or size.x < 10:
 		return
-	var box := Rect2(hex_to_px(Game.cells.keys()[0]), Vector2.ZERO)
+	var bounds := Rect2(hex_to_px(Game.cells.keys()[0]), Vector2.ZERO)
 	for h in Game.cells:
-		box = box.expand(hex_to_px(h))
-	box = box.grow(HEX)
-	zoom = clampf(minf(size.x / box.size.x, size.y / box.size.y), 0.4, 2.0)
-	origin = size / 2 - box.get_center() * zoom
+		bounds = bounds.expand(hex_to_px(h))
+	bounds = bounds.grow(HEX * 2)
+	_focus = _point(bounds.get_center(), 0)
+	zoom = clampf(minf(size.x / bounds.size.x, size.y / bounds.size.y), 0.3, 2.0)
 	_centered = true
-	queue_redraw()
+	_update_camera()
 
 
 func center_on(h: Vector2i) -> void:
-	origin = size / 2 - hex_to_px(h) * zoom
-	queue_redraw()
+	_focus = _point(hex_to_px(h), 0)
+	_update_camera()
 
 
 # ---------------------------------------------------------------- 坐标换算
@@ -91,11 +224,25 @@ static func px_to_hex(p: Vector2) -> Vector2i:
 
 
 func to_screen(world: Vector2) -> Vector2:
-	return origin + world * zoom
+	return _camera.unproject_position(_point(world, _height(px_to_hex(world)) + 2))
 
 
+## 按每块地形表面求交，避免山地的点选被平面投影偏移。
 func to_world(screen: Vector2) -> Vector2:
-	return (screen - origin) / zoom
+	var ray := _camera.project_ray_origin(screen)
+	var direction := _camera.project_ray_normal(screen)
+	var nearest := INF
+	var result := Vector2.ZERO
+	for h in Game.cells:
+		var distance: float = (_height(h) - ray.y) / direction.y
+		var hit := ray + direction * distance
+		if distance > 0 and distance < nearest and px_to_hex(Vector2(hit.x, hit.z)) == h:
+			nearest = distance
+			result = Vector2(hit.x, hit.z)
+	if nearest == INF:
+		var hit := ray + direction * (-ray.y / direction.y)
+		result = Vector2(hit.x, hit.z)
+	return result
 
 
 ## 六个角，第 i 个角在 60i-30 度（尖顶朝上）。第 i 条边（角 i 到 i+1）对着 DIRS[i] 方向的邻格
@@ -135,126 +282,82 @@ func _gui_input(event: InputEvent) -> void:
 		var mm := event as InputEventMouseMotion
 		if _drag_moved or mm.position.distance_to(_drag_start) > 5:
 			_drag_moved = true
-			origin += mm.relative
+			if mm.alt_pressed:
+				_yaw -= mm.relative.x * 0.008
+			else:
+				_pan(mm.relative)
+			_update_camera()
 			queue_redraw()
 		accept_event()
 	elif event is InputEventMagnifyGesture:
 		_zoom_at((event as InputEventMagnifyGesture).position, (event as InputEventMagnifyGesture).factor)
 	elif event is InputEventPanGesture:
-		origin -= (event as InputEventPanGesture).delta * 10
+		_pan(-(event as InputEventPanGesture).delta * 10)
+		_update_camera()
 		queue_redraw()
 
 
+func _pan(delta: Vector2) -> void:
+	var right := _camera.global_transform.basis.x
+	var forward := Vector3(-right.z, 0, right.x)
+	_focus -= (right * delta.x + forward * delta.y * 1.5) / zoom
+
+
 func _zoom_at(at: Vector2, factor: float) -> void:
-	var w := to_world(at)
+	var before := to_world(at)
 	zoom = clampf(zoom * factor, 0.3, 3.0)
-	origin = at - w * zoom
-	queue_redraw()
+	_update_camera()
+	var after := to_world(at)
+	_focus += _point(before - after, 0)
+	_update_camera()
 
 
-# ---------------------------------------------------------------- 绘制
+func _outline(h: Vector2i, color: Color, width: float = 2.0) -> void:
+	var points := PackedVector2Array()
+	for corner in corners(hex_to_px(h), HEX * 0.95):
+		points.append(_camera.unproject_position(_point(corner, _height(h) + 1)))
+	points.append(points[0])
+	draw_polyline(points, color, width, true)
+
 
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), Color("#1d1f24"))
-	if Game.cells.is_empty():
+	if _camera == null or Game.cells.is_empty():
 		return
-	draw_set_transform(origin, 0, Vector2(zoom, zoom))
-	var font := get_theme_default_font()
-
-	# 地形
-	for h in Game.cells:
-		var c: Dictionary = Game.cells[h]
-		var col: Color = TERRAIN_COLORS.get(str(c.terrain), Color(0.6, 0.6, 0.6))
-		draw_colored_polygon(corners(hex_to_px(h)), col)
-
-	# 城的疆域：按所有者上色
-	for h in Game.tile_city:
-		var lord = Game.city_owner(Game.tile_city[h])
-		var col := Game.person_color(lord)
-		col.a = 0.22
-		draw_colored_polygon(corners(hex_to_px(h), HEX * 0.98), col)
-
-	# 视野外变暗
-	for h in Game.cells:
-		if not Game.vision.has(h):
-			draw_colored_polygon(corners(hex_to_px(h)), Color(0.05, 0.05, 0.08, 0.5))
-
-	# 格线
-	for h in Game.cells:
-		var pts := corners(hex_to_px(h))
-		pts.append(pts[0])
-		draw_polyline(pts, Color(0, 0, 0, 0.25), 1.0)
-
-	# 城与城、城与野地之间的边界
 	for h in Game.tile_city:
 		var id: int = Game.tile_city[h]
-		var col := Game.person_color(Game.city_owner(id)).darkened(0.2)
-		var pts := corners(hex_to_px(h))
+		var points := corners(hex_to_px(h))
 		for i in 6:
-			var n: Vector2i = h + DIRS[i]
-			if Game.tile_city.get(n, -1) != id:
-				draw_line(pts[i], pts[(i + 1) % 6], col, 3.0)
-
-	# 高亮
+			if Game.tile_city.get(h + DIRS[i], -1) != id:
+				draw_line(_camera.unproject_position(_point(points[i], _height(h) + 1)), _camera.unproject_position(_point(points[(i + 1) % 6], _height(h) + 1)), Game.person_color(Game.city_owner(id)), 2, true)
 	for h in highlight:
-		var pts := corners(hex_to_px(h), HEX * 0.92)
-		pts.append(pts[0])
-		draw_polyline(pts, highlight[h], 3.0)
-
-	# 选中的军队：行军目的地、粮道
+		_outline(h, highlight[h])
+	if selected_hex != null:
+		_outline(selected_hex, Color("#ffe14d"), 3)
 	var army = Game.my_armies.get(selected_army)
 	if army != null:
-		var from := hex_to_px(Game.hx(army.pos))
 		if army.supply != null and not army.supply.path.is_empty():
 			var seat = Game.my_cities.get(int(army.supply.from))
-			var prev := hex_to_px(Game.hx(seat.seat)) if seat != null else hex_to_px(Game.hx(army.supply.path[0]))
+			var previous := to_screen(hex_to_px(Game.hx(seat.seat if seat != null else army.supply.path[0])))
 			for p in army.supply.path:
-				var cur := hex_to_px(Game.hx(p))
-				draw_dashed_line(prev, cur, Color("#f3e3a0"), 2.5, 6.0)
-				prev = cur
+				var current := to_screen(hex_to_px(Game.hx(p)))
+				draw_dashed_line(previous, current, Color("#f3e3a0"), 2, 6)
+				previous = current
 		if army.dest != null:
-			var to := hex_to_px(Game.hx(army.dest))
-			draw_line(from, to, Color(1, 1, 1, 0.85), 3.0)
-			draw_circle(to, 6.0, Color(1, 1, 1, 0.85))
-
-	# 选中的格子
-	if selected_hex != null:
-		var pts := corners(hex_to_px(selected_hex), HEX * 0.95)
-		pts.append(pts[0])
-		draw_polyline(pts, Color("#ffe14d"), 3.5)
-
-	# 城
+			draw_line(to_screen(hex_to_px(Game.hx(army.pos))), to_screen(hex_to_px(Game.hx(army.dest))), Color.WHITE, 3, true)
+	var font := get_theme_default_font()
 	for h in Game.seat_city:
-		_draw_city(h, Game.seat_city[h])
-
-	# 军队
+		_text(font, to_screen(hex_to_px(h)) + Vector2(0, 29), Game.city_name(Game.seat_city[h]), 17, Color.WHITE, true)
 	for h in Game.armies_at:
-		var list: Array = Game.armies_at[h]
-		for i in list.size():
-			_draw_army(h, list[i], i, list.size())
-
-	# 文字在屏幕坐标里画，缩放时不糊
-	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
-	var fs := int(clampf(14 * zoom, 9, 24))
-	if zoom > 0.7:
-		for h in Game.cells:
-			if Game.seat_city.has(h) or Game.armies_at.has(h):
-				continue
-			var sym := str(Game.config.get("terrains", {}).get(str(Game.cells[h].terrain), {}).get("symbol", ""))
-			_text(font, to_screen(hex_to_px(h)) + Vector2(0, fs * 0.35), sym, fs, Color(0, 0, 0, 0.35))
-	for h in Game.seat_city:
-		var id: int = Game.seat_city[h]
-		var p := to_screen(hex_to_px(h) + Vector2(0, HEX * 0.82))
-		_text(font, p, Game.city_name(id), fs + 2, Color.WHITE, true)
-	for h in Game.armies_at:
-		var list: Array = Game.armies_at[h]
-		for i in list.size():
-			var c := to_screen(_army_pos(h, i, list.size()))
-			var a: Dictionary = list[i].data
-			var label := str(Game.army_size(a))
-			if not list[i].own and not a.visible:
+		var entries: Array = Game.armies_at[h]
+		for i in entries.size():
+			var entry: Dictionary = entries[i]
+			var label := str(Game.army_size(entry.data))
+			if not entry.own and not entry.data.visible:
 				label += "?"
-			_text(font, c + Vector2(0, fs * 0.36), label, maxi(fs - 2, 9), Color.WHITE, true)
+			var at := to_screen(_army_pos(h, i, entries.size()))
+			if int(entry.data.id) == selected_army:
+				draw_arc(at, 15, 0, TAU, 24, Color("#ffe14d"), 2)
+			_text(font, at + Vector2(0, 6), label, 14, Color.WHITE, true)
 
 
 func _text(font: Font, at: Vector2, s: String, fs: int, col: Color, outline := false) -> void:
@@ -265,31 +368,6 @@ func _text(font: Font, at: Vector2, s: String, fs: int, col: Color, outline := f
 	draw_string(font, pos, s, HORIZONTAL_ALIGNMENT_CENTER, w, fs, col)
 
 
-func _draw_city(h: Vector2i, id: int) -> void:
-	var c := hex_to_px(h) + Vector2(0, -4)
-	var city = Game.my_cities.get(id, Game.foreign_cities.get(id))
-	var owner_col := Game.person_color(Game.city_owner(id))
-	var has_wall := false
-	if city != null:
-		# 自己的城报告里 wall 是剩下的防御值，别人的城是有没有城墙
-		has_wall = city.wall != null and city.wall != false
-	# 城：方形城郭，有城墙的画外圈
-	var r := HEX * 0.42
-	if has_wall:
-		draw_rect(Rect2(c - Vector2(r + 6, r + 6), Vector2(r + 6, r + 6) * 2), Color("#3b3026"), false, 3.0)
-	draw_rect(Rect2(c - Vector2(r, r), Vector2(r, r) * 2), Color("#e9dfc8"))
-	draw_rect(Rect2(c - Vector2(r, r), Vector2(r, r) * 2), owner_col.darkened(0.3), false, 3.0)
-	# 城门和宫室
-	draw_rect(Rect2(c + Vector2(-r * 0.25, r * 0.4), Vector2(r * 0.5, r * 0.6)), Color("#5a4632"))
-	draw_rect(Rect2(c + Vector2(-r * 0.5, -r * 0.6), Vector2(r, r * 0.6)), owner_col)
-	# 被攻占：插上占领者的旗
-	var occ = Game.city_occupier(id)
-	if occ != null:
-		var pole := c + Vector2(r * 0.9, -r * 0.9)
-		draw_line(pole, pole + Vector2(0, -r * 1.2), Color.BLACK, 2.0)
-		draw_colored_polygon(PackedVector2Array([pole + Vector2(0, -r * 1.2), pole + Vector2(r * 0.9, -r * 0.95), pole + Vector2(0, -r * 0.7)]), Game.person_color(occ))
-
-
 func _army_pos(h: Vector2i, i: int, n: int) -> Vector2:
 	var c := hex_to_px(h)
 	# 城的治所上的军队挪到右上角，别挡住城
@@ -298,24 +376,6 @@ func _army_pos(h: Vector2i, i: int, n: int) -> Vector2:
 	if n > 1:
 		c += Vector2((i - (n - 1) / 2.0) * HEX * 0.55, 0)
 	return c
-
-
-func _draw_army(h: Vector2i, entry: Dictionary, i: int, n: int) -> void:
-	var a: Dictionary = entry.data
-	var c := _army_pos(h, i, n)
-	var col := Game.person_color(a.commander)
-	var faded: bool = not entry.own and not a.visible
-	if faded:
-		col.a = 0.45
-	var rad := HEX * 0.3
-	# 旗杆和三角旗
-	draw_line(c + Vector2(-rad * 0.2, -rad), c + Vector2(-rad * 0.2, -rad * 2.1), Color(0, 0, 0, col.a), 2.0)
-	draw_colored_polygon(PackedVector2Array([c + Vector2(-rad * 0.2, -rad * 2.1), c + Vector2(rad * 0.9, -rad * 1.75), c + Vector2(-rad * 0.2, -rad * 1.4)]), col)
-	draw_circle(c, rad, col)
-	var ring := Color.WHITE if entry.own else Color(0.1, 0.1, 0.1, col.a)
-	draw_arc(c, rad, 0, TAU, 24, ring, 2.5 if int(a.id) == selected_army else 1.5)
-	if int(a.id) == selected_army:
-		draw_arc(c, rad + 4, 0, TAU, 24, Color("#ffe14d"), 2.5)
 
 
 ## 这一格上的军队，自己的在前

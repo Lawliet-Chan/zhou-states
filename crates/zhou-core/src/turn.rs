@@ -50,6 +50,8 @@ pub struct ArmyReport {
     pub pos: Hex,
     pub dest: Option<Hex>,
     pub moves_left: u32,
+    /// 是否正在驻守城墙，供前端显示当前状态。
+    pub on_wall: bool,
     /// 不在自己的城的地上，要靠粮道供粮
     pub on_campaign: bool,
     pub supply: Option<SupplyReport>,
@@ -401,6 +403,7 @@ fn build_report(
                 pos: a.pos,
                 dest: a.dest,
                 moves_left: a.moves_left,
+                on_wall: a.on_wall,
                 on_campaign: a.on_campaign(state),
                 supply: a.supply.as_ref().map(|l| SupplyReport {
                     from: l.from,

@@ -3933,7 +3933,7 @@ fn marches_go_around_cities_without_passage_and_other_armies() {
     };
     assert_eq!(
         apply(&mut state, &config, ids.player, &march),
-        Err(CommandError::NoPath(Hex::new(5, 0)))
+        Err(CommandError::PassageConfirmation(vec![city]))
     );
 
     // 有了通行权就能走
@@ -4746,7 +4746,7 @@ fn forcing_through_a_city_declares_war_and_peace_returns_or_cedes_occupied_citie
     };
     assert_eq!(
         apply(&mut state, &config, ids.player, &march(false)),
-        Err(CommandError::NoPath(Hex::new(5, 0)))
+        Err(CommandError::PassageConfirmation(vec![city]))
     );
     // 硬闯：走进别人的城就是宣战，无国籍的人之间不用理由
     apply(&mut state, &config, ids.player, &march(true)).unwrap();
@@ -4985,4 +4985,49 @@ fn players_only_see_what_is_in_their_sight() {
     let report = end_turn_fed(&mut state, &config);
     let mine = zhou_core::player_report(&state, &config, &report, me);
     assert!(mine.foreign_armies.is_empty());
+}
+
+#[test]
+fn ranged_destruction_requires_entry_into_city_center() {
+    let config = config();
+    let (mut state, ids, army, other) = war_on_corridor(&config);
+    let seat = Hex::new(5, 0);
+    let city = enemy_city(&mut state, &ids, other, seat);
+    let c = state.cities.get_mut(&city).unwrap();
+    c.wall_damage = Fx::int(10000);
+    c.center_damage = config.siege.center_hp - Fx::milli(1);
+    for squad in &mut state.armies.get_mut(&army).unwrap().squads {
+        squad.gear.add("bow", Fx::int(1000));
+    }
+    state.armies.get_mut(&army).unwrap().pos = Hex::new(3, 0);
+    apply(
+        &mut state,
+        &config,
+        ids.player,
+        &Command::Attack {
+            army,
+            at: seat,
+            ranged: true,
+        },
+    )
+    .unwrap();
+    assert!(state.cities[&city].center_damage >= config.siege.center_hp);
+    assert_eq!(state.cities[&city].occupier, None);
+    assert_eq!(state.armies[&army].pos, Hex::new(3, 0));
+    end_turn_fed(&mut state, &config);
+    // 已摧毁的中心必须由军队走入，才能触发占领。
+    state.armies.get_mut(&army).unwrap().pos = Hex::new(4, 0);
+    apply(
+        &mut state,
+        &config,
+        ids.player,
+        &Command::MarchArmy {
+            army,
+            to: seat,
+            force: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(state.armies[&army].pos, seat);
+    assert_eq!(state.cities[&city].occupier, Some(ids.player));
 }

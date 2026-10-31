@@ -255,13 +255,16 @@ fn strike(
             .to(holder)
             .at(at),
     );
-    if state.cities[&city_id].center_damage >= config.siege.center_hp {
-        capture(state, config, city_id, commander, events);
-        if !ranged {
+    if !ranged
+        && at == state.cities[&city_id].seat
+        && state.cities[&city_id].center_damage >= config.siege.center_hp
+    {
+        {
             let army = state.armies.get_mut(&army_id).expect("exists");
             army.pos = at;
             army.on_wall = false;
         }
+        capture_on_entry(state, config, army_id, events);
     }
     finish_attack(state, config, army_id);
     Ok(())
@@ -412,6 +415,31 @@ fn bury(state: &mut GameState, config: &Config, ids: &[Id], events: &mut Vec<Eve
 
 /// 城中心被打下来：城被攻占。占领者用它的府库、收税、征兵，但没有所有权；
 /// 原来的管理者失去管理权，占领者要在当回合选一个人物或者士人来接管。原所有者打回来就收复。
+/// 只有军队实际进入已失守的城中心，才能占领；远程破坏不改变归属。
+pub(crate) fn capture_on_entry(
+    state: &mut GameState,
+    config: &Config,
+    army_id: Id,
+    events: &mut Vec<Event>,
+) {
+    let army = &state.armies[&army_id];
+    let Some(city) = state.city_at(army.pos).map(|id| &state.cities[&id]) else {
+        return;
+    };
+    if army.pos != city.seat
+        || !hostile_city(state, city, army.commander)
+        || city.wall_standing(config)
+        || city.center_damage < config.siege.center_hp
+        || state
+            .armies
+            .values()
+            .any(|a| Some(a.commander) == city.holder() && city.tile_at(a.pos).is_some())
+    {
+        return;
+    }
+    capture(state, config, city.id, army.commander, events);
+}
+
 fn capture(state: &mut GameState, config: &Config, city_id: Id, by: Id, events: &mut Vec<Event>) {
     let by_name = state
         .characters
