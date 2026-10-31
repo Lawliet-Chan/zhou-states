@@ -1,9 +1,19 @@
-[gd_scene format=3]
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/responsive_dialog.gd" id="1"]
 
 [node name="Dialog" type="ConfirmationDialog"]
 title = "操作"
-size = Vector2i(520, 180)
+size = Vector2i(640, 180)
+script = ExtResource("1")
 ok_button_text = "确定"
 cancel_button_text = "取消"
-[node name="Content" type="VBoxContainer" parent="."]
-custom_minimum_size = Vector2(460, 0)
+
+[node name="Scroll" type="ScrollContainer" parent="."]
+size_flags_horizontal = 3
+size_flags_vertical = 3
+horizontal_scroll_mode = 1
+
+[node name="Content" type="VBoxContainer" parent="Scroll"]
+size_flags_horizontal = 3
+theme_override_constants/separation = 12

@@ -8,6 +8,7 @@ const PANEL_WIDTH := 400
 var domestic = preload("res://scripts/domestic.gd").new(self)
 
 var _known_occupiers := {}
+var _city_tabs := {}
 var command_feedback: Label
 var map_view: Control
 var login_box: Control
@@ -33,6 +34,7 @@ var target_mode := ""
 var _logged_turn := -1
 var _logged_count := 0
 var _args := {}
+var _connection_error := ""
 
 
 func _ready() -> void:
@@ -43,6 +45,12 @@ func _ready() -> void:
 	game_box.visible = false
 	Net.opened.connect(_on_opened)
 	Net.closed.connect(_on_closed)
+	Game.incompatible_server.connect(func(message: String):
+		_connection_error = message
+		login_status.text = message
+		login_box.visible = true
+		game_box.visible = false
+		Net.close())
 	Game.logged_in.connect(_on_logged_in)
 	Game.view_changed.connect(_on_view_changed)
 	Game.waiting_changed.connect(_on_waiting_changed)
@@ -163,6 +171,9 @@ func _row(parent: Node, label: String, ctrl: Control) -> HBoxContainer:
 	var l := Label.new()
 	l.text = label
 	l.custom_minimum_size = Vector2(80, 0)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ctrl.size_flags_stretch_ratio = 2
 	h.add_child(l)
 	ctrl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	h.add_child(ctrl)
@@ -226,6 +237,7 @@ func _btn(parent: Node, text: String, cb: Callable, disabled := false) -> Button
 # ---------------------------------------------------------------- 连接
 
 func _connect() -> void:
+	_connection_error = ""
 	var err := Net.open(url_edit.text.strip_edges())
 	login_status.text = "正在连接……" if err == OK else "连不上：%s" % error_string(err)
 
@@ -236,7 +248,7 @@ func _on_opened() -> void:
 
 
 func _on_closed() -> void:
-	login_status.text = "连接断开"
+	login_status.text = _connection_error if _connection_error != "" else "连接断开"
 	if game_box.visible:
 		_log("[color=#ff8080]与服务器的连接断开了[/color]")
 		login_box.visible = true
@@ -262,9 +274,18 @@ func _screenshot(path: String) -> void:
 		var p: PackedStringArray = _args.select.split(",")
 		_on_hex_clicked(Vector2i(int(p[0]), int(p[1])))
 		await get_tree().create_timer(0.5).timeout
+	if _args.has("population"):
+		for city_tabs in detail.find_children("*", "TabContainer", true, false):
+			city_tabs.current_tab = 3
+		for button in detail.find_children("*", "Button", true, false):
+			if button.toggle_mode:
+				button.button_pressed = true
+		await get_tree().create_timer(0.3).timeout
 	if _args.has("press"):
 		var b := _find_button(detail, _args.press)
 		if b != null:
+			if b.toggle_mode:
+				b.button_pressed = not b.button_pressed
 			b.pressed.emit()
 		await get_tree().create_timer(0.5).timeout
 	if _args.has("tab"):
@@ -558,14 +579,7 @@ func _city_detail(c: Dictionary) -> void:
 	var officials_start := detail.get_child_count()
 	domestic.officials(c, detail)
 	var people_start := detail.get_child_count()
-	_section(detail, "人群")
-	for g in c.groups:
-		var skills: Array = g.skills.map(func(s): return Game.cname("skills", s))
-		_kv(detail, "%s %d 人" % [g.name, int(g.size)], "、".join(skills))
-		_note(detail, "　愉悦 %s　教化 %s　忠诚 %s%s" % [Game.fx(g.happiness), Game.fx(g.culture), Game.fx(g.loyalty),
-			"　敌视 %s" % Game.fx(g.hostility) if int(g.hostility) > 0 else ""])
-
-		domestic.group_actions(c, g, detail)
+	domestic.population(c, detail)
 
 	_section(detail, "工事")
 	if c.assignments.is_empty():
@@ -581,10 +595,6 @@ func _city_detail(c: Dictionary) -> void:
 		var aid := int(a.id)
 		_btn(row, "撤", func(): Game.send_command({"type": "cancel_assignment", "city": id, "assignment": aid}, "%s撤掉「%s」" % [c.name, t]), not domestic.can_manage(c))
 		detail.add_child(row)
-	if not c.learning.is_empty():
-		_section(detail, "学技能")
-		for l in c.learning:
-			_note(detail, "%d 人学习%s，已学 %d 回合" % [int(l.count), Game.cname("skills", l.skill), int(l.turns)])
 	# 保留总览，把详细内容按治理任务分组，减少长控制板。
 	var children := detail.get_children()
 	var city_tabs := TabContainer.new()
@@ -603,6 +613,8 @@ func _city_detail(c: Dictionary) -> void:
 		city_tabs.add_child(content)
 		for i in range(group[1], group[2]):
 			children[i].reparent(content)
+	city_tabs.current_tab = int(_city_tabs.get(id, 0))
+	city_tabs.tab_changed.connect(func(index): _city_tabs[id] = index)
 	_back_button()
 
 
@@ -726,6 +738,11 @@ func _vassal_city(c: Dictionary) -> void:
 
 
 func _foreign_city_detail(c: Dictionary) -> void:
+	if bool(c.get("public_landmark", false)):
+		_header(detail, str(c.name))
+		_note(detail, "周王室都城：公开位置，周边尚未探索。城防、驻军与内情须实际探索后才能获知。")
+		_back_button()
+		return
 	_header(detail, "%s（%s）" % [c.name, c.size])
 	_kv(detail, "所有者", Game.person_name(c.owner))
 	_kv(detail, "国家", Game.country_name(c.country))
@@ -733,7 +750,6 @@ func _foreign_city_detail(c: Dictionary) -> void:
 		_kv(detail, "被攻占", "占领者 %s" % Game.person_name(c.occupier))
 	_kv(detail, "城墙", "已破" if c.wall_broken else ("有" if c.wall else "无"))
 	_note(detail, "攻占流程：破城墙 → 清除守军 → 攻打城中心。城中心血量归零后须军队进入城中心才算占领，远程攻击不能占领；选择军队后点击攻击，再选择该城的地块。")
-	_kv(detail, "消息", "眼下看得到" if c.visible else "第 %d 回合所见" % int(c.turn))
 	if c.fief != null:
 		_vassal_city(c)
 	if c.owner != null and int(c.owner) != Game.me:
@@ -751,6 +767,10 @@ func _army_detail(a) -> void:
 	_kv(detail, "编成于", Game.city_name(a.city))
 	_kv(detail, "位置", _hex_text(Game.hx(a.pos)))
 	_kv(detail, "目的地", "无" if a.dest == null else _hex_text(Game.hx(a.dest)))
+	if a.dest != null:
+		_note(detail, "地图标注预计各回合落点（本回合为第1回合）；遇敌或道路变化时会调整。")
+		if bool(a.get("march_plan", {}).get("uncertain", false)):
+			_note(detail, "部分路段未探索或受阻，后续落点待探明。")
 	_kv(detail, "行军力", int(a.moves_left))
 	_kv(detail, "城墙驻守", "驻守中" if a.on_wall else "未驻守")
 	_kv(detail, "出征", "是（要靠粮道供粮）" if a.on_campaign else "否（在自己的城的地上）")
@@ -800,7 +820,6 @@ func _foreign_army_detail(a) -> void:
 		return
 	_header(detail, "%s的军队　%d 人" % [Game.person_name(a.commander), Game.army_size(a)])
 	_kv(detail, "位置", _hex_text(Game.hx(a.pos)))
-	_kv(detail, "消息", "眼下看得到" if a.visible else "第 %d 回合所见，之后去向不明" % int(a.turn))
 	for u in a.units:
 		_note(detail, "%s %d 人" % [Game.cname("units", u), int(a.units[u])])
 	_back_button()
@@ -882,7 +901,7 @@ func _declare_war(target: Dictionary) -> void:
 
 func _confirm(text: String, cb: Callable) -> void:
 	var d: ConfirmationDialog = preload("res://scenes/confirm_dialog.tscn").instantiate()
-	d.dialog_text = text
+	_note(d.get_node("Scroll/Content"), text)
 	d.ok_button_text = "是"
 	d.cancel_button_text = "否"
 	d.confirmed.connect(cb)
@@ -891,14 +910,9 @@ func _confirm(text: String, cb: Callable) -> void:
 	_popup(d)
 
 
-## 弹出对话框：自动换行的文字会先把高度撑大，等排好版再收缩到内容的高度
+## 尺寸与内容滚动由 responsive_dialog 统一处理。
 func _popup(d: Window) -> void:
-	d.popup_centered(Vector2i(520, 0))
-	await get_tree().process_frame
-	if not is_instance_valid(d) or d.is_queued_for_deletion():
-		return
-	d.size = Vector2i(520, 0)
-	d.move_to_center()
+	d.popup_centered(Vector2i(640, 180))
 
 
 func _dialog(title: String) -> Array:
@@ -907,7 +921,7 @@ func _dialog(title: String) -> Array:
 	d.ok_button_text = "确定"
 	d.cancel_button_text = "取消"
 	d.visibility_changed.connect(func(): if not d.visible: d.queue_free())
-	var v: VBoxContainer = d.get_node("Content")
+	var v: VBoxContainer = d.get_node("Scroll/Content")
 	add_child(d)
 	return [d, v]
 

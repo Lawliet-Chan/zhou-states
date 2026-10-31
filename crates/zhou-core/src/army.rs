@@ -565,6 +565,7 @@ pub fn march(state: &mut GameState, config: &Config, army_id: Id, events: &mut V
             army.dest = None;
         }
         crate::combat::capture_on_entry(state, config, army_id, events);
+        crate::vision::observe(state, config);
         // 走到敌军旁边就停下，直接开打
         if crate::combat::engage(state, config, army_id, events) {
             return;
@@ -588,6 +589,62 @@ pub fn march(state: &mut GameState, config: &Config, army_id: Id, events: &mut V
             return;
         }
     }
+}
+
+/// 复用实际寻路和耗时规则，生成纯展示用的回合落点；不移动、不宣战、不战斗。
+pub fn march_plan(state: &GameState, config: &Config, army: &Army) -> crate::turn::MarchPlan {
+    use crate::turn::{MarchPlan, MarchStop};
+    let mut plan = MarchPlan::default();
+    let Some(dest) = army.dest else { return plan };
+    let full = army.moves(config);
+    if full == 0 {
+        return plan;
+    }
+    let Some(path) = state
+        .map
+        .shortest_path(army.pos, dest, |p| step_cost(state, config, army, p))
+    else {
+        plan.uncertain = true;
+        return plan;
+    };
+    let mut known = crate::vision::vision(state, config, army.commander);
+    if let Some(intel) = state.intel.get(&army.commander) {
+        known.extend(&intel.explored);
+        if intel.explored.is_empty() {
+            for city in intel.cities.values() {
+                known.extend(&city.tiles);
+            }
+        }
+    }
+    let seen = crate::vision::vision(state, config, army.commander);
+    let mut turn = 1;
+    let mut left = army.moves_left;
+    let mut at = army.pos;
+    for next in path {
+        if !known.contains(&next) {
+            plan.uncertain = true;
+            break;
+        }
+        if state.armies.values().any(|a| {
+            a.pos == next && seen.contains(&a.pos) && state.at_war(army.commander, a.commander)
+        }) {
+            plan.uncertain = true;
+            break;
+        }
+        let cost = step_cost(state, config, army, next).expect("已在路线中");
+        if left == 0 || (left < cost && left < full) {
+            plan.stops.push(MarchStop { turn, at });
+            turn += 1;
+            left = full;
+        }
+        left = left.saturating_sub(cost);
+        at = next;
+        plan.path.push(next);
+    }
+    if at != army.pos || !plan.stops.is_empty() {
+        plan.stops.push(MarchStop { turn, at });
+    }
+    plan
 }
 
 /// 新回合开始：所有军队的行军力回满，有目的地的接着走。

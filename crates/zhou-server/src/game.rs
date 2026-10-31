@@ -99,7 +99,23 @@ pub struct Game {
 }
 
 impl Game {
-    pub fn new(state: GameState, config: Config, save: Option<PathBuf>) -> Self {
+    pub fn new(mut state: GameState, config: Config, save: Option<PathBuf>) -> Self {
+        for city in state.cities.values_mut() {
+            for group in city.groups.values_mut() {
+                group.name = group
+                    .name
+                    .replace("东郭", "")
+                    .replace("南里", "")
+                    .replace("西市", "");
+            }
+            for official in city.officials.values_mut() {
+                official.name = official
+                    .name
+                    .replace("东郭", "")
+                    .replace("南里", "")
+                    .replace("西市", "");
+            }
+        }
         Self {
             state,
             config,

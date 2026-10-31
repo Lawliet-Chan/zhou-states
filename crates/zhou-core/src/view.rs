@@ -26,7 +26,7 @@ pub struct PlayerReport {
     pub events: Vec<Event>,
     /// 眼下看得到的格子
     pub vision: Vec<Hex>,
-    /// 整张地图的地形都公开；格子属于哪座城，只有见过那座城才知道
+    /// 已探索地形与王室都城所在格；未探索地形不下发
     pub map: Vec<CellReport>,
     /// 自己拥有、管理、攻占的城，看得到全部内情
     pub cities: Vec<CityReport>,
@@ -62,6 +62,8 @@ pub struct Offer {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForeignCity {
+    /// 未探索到的王室都城，仅为公共地标。
+    pub public_landmark: bool,
     #[serde(flatten)]
     pub sighting: CitySighting,
     /// 眼下在视野里
@@ -109,21 +111,52 @@ pub fn player_report(
             .get(&id)
             .is_some_and(|c| c.insiders().contains(&who))
     };
-    let known = |id: Id| mine(id) || intel.cities.contains_key(&id);
-    let foreign_cities = intel
-        .cities
+    let capitals = crate::vision::public_capitals(state, config);
+    let known = |id: Id| mine(id) || intel.cities.contains_key(&id) || capitals.contains(&id);
+    let mut explored = intel.explored.clone();
+    explored.extend(vision.iter().copied());
+    if intel.explored.is_empty() {
+        for city in intel.cities.values() {
+            explored.extend(city.tiles.iter().copied());
+        }
+        explored.extend(intel.armies.values().map(|a| a.pos));
+    }
+    let mut sightings = intel.cities.clone();
+    for id in &capitals {
+        if !sightings.contains_key(id)
+            && !mine(*id)
+            && let Some(city) = state.cities.get(id)
+        {
+            let mut landmark = crate::vision::glimpse(state, config, city);
+            landmark.tiles = vec![city.seat];
+            landmark.size.clear();
+            landmark.wall = false;
+            landmark.wall_broken = false;
+            sightings.insert(*id, landmark);
+        }
+    }
+    let public_seats: std::collections::BTreeSet<_> = capitals
+        .iter()
+        .filter_map(|id| state.cities.get(id).map(|c| c.seat))
+        .collect();
+    let foreign_cities = sightings
         .values()
         .filter(|c| !mine(c.id))
         .map(|c| {
             let full = report.cities.iter().find(|r| r.id == c.id);
+            let mut sighting = c.clone();
+            sighting
+                .tiles
+                .retain(|p| explored.contains(p) || (capitals.contains(&c.id) && *p == c.seat));
             ForeignCity {
+                public_landmark: capitals.contains(&c.id) && !intel.cities.contains_key(&c.id),
                 visible: c.tiles.iter().any(|p| vision.contains(p)),
                 fief: full.filter(|r| r.liege == Some(who)).map(|r| FiefView {
                     tribute: r.tribute.clone(),
                     tribute_excessive: r.tribute_excessive,
                     grievances: r.grievances.clone(),
                 }),
-                sighting: c.clone(),
+                sighting,
             }
         })
         .collect();
@@ -152,6 +185,7 @@ pub fn player_report(
         map: report
             .map
             .iter()
+            .filter(|c| explored.contains(&c.pos) || public_seats.contains(&c.pos))
             .map(|c| CellReport {
                 city: c.city.filter(|id| known(*id)),
                 ..c.clone()

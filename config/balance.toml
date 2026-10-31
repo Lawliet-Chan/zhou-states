@@ -10,6 +10,9 @@
 seasons = ["春", "夏", "秋", "冬"]
 months_per_season = 3
 
+# 人口页行业顺序；技能的工种归属见 skills
+industries = [{ key = "shi", name = "士" }, { key = "agriculture", name = "农" }, { key = "craft", name = "工" }, { key = "commerce", name = "商" }, { key = "military", name = "军" }]
+
 [population]
 # 消耗按每多少人计算
 per_people = 100000
@@ -35,13 +38,8 @@ treasury_covers_shortfall = true
 # 每 per_people 人每回合的消耗。goods 中任意一种都可以满足，按顺序扣除
 [[population.consumption]]
 name = "食物"
-goods = ["grain", "fish", "meat"]
+goods = ["grain"]
 amount = 670
-
-[[population.consumption]]
-name = "盐"
-goods = ["salt"]
-amount = 330
 
 [happiness]
 max = 1000000
@@ -264,21 +262,21 @@ siege_engine = { name = "攻城机", category = "military", value = 80000 }
 # default_recipe：未被管理的人口按技能槽第一项技能自主民营时使用的配方
 
 [skills]
-shi = { name = "士" }
-farming = { name = "农·五谷", default_recipe = "grain" }
-fishing = { name = "农·渔", default_recipe = "fish" }
-salt_making = { name = "农·盐", default_recipe = "salt" }
-hunting = { name = "畜牧·狩猎", default_recipe = "hunt" }
-horse_breeding = { name = "畜牧·驯马", default_recipe = "horse" }
-smelting = { name = "百工·冶", default_recipe = "bronze" }
-armory = { name = "百工·军备", default_recipe = "weapon" }
-ritual_craft = { name = "百工·礼器", default_recipe = "gui" }
-luxury = { name = "百工·奢侈品", default_recipe = "jade" }
-weaving = { name = "百工·纺织", default_recipe = "cloth" }
-building = { name = "百工·建筑" }
-water = { name = "百工·水利" }
-commerce = { name = "商业", default_recipe = "trade" }
-martial = { name = "军武" }
+shi = { industry = "shi", trade_name = "士人", name = "士" }
+farming = { industry = "agriculture", trade_name = "种粮", name = "农·五谷", default_recipe = "grain" }
+fishing = { industry = "agriculture", trade_name = "渔业", name = "农·渔", default_recipe = "fish" }
+salt_making = { industry = "agriculture", trade_name = "制盐", name = "农·盐", default_recipe = "salt" }
+hunting = { industry = "agriculture", trade_name = "狩猎", name = "畜牧·狩猎", default_recipe = "hunt" }
+horse_breeding = { industry = "agriculture", trade_name = "驯马", name = "畜牧·驯马", default_recipe = "horse" }
+smelting = { industry = "craft", trade_name = "冶炼", name = "百工·冶", default_recipe = "bronze" }
+armory = { industry = "craft", trade_name = "军备制造", name = "百工·军备", default_recipe = "weapon" }
+ritual_craft = { industry = "craft", trade_name = "礼器", name = "百工·礼器", default_recipe = "gui" }
+luxury = { industry = "craft", trade_name = "玉作", name = "百工·奢侈品", default_recipe = "jade" }
+weaving = { industry = "craft", trade_name = "纺织", name = "百工·纺织", default_recipe = "cloth" }
+building = { industry = "craft", trade_name = "建筑", name = "百工·建筑" }
+water = { industry = "craft", trade_name = "水利", name = "百工·水利" }
+commerce = { industry = "commerce", trade_name = "商业", name = "商业", default_recipe = "trade" }
+martial = { industry = "military", trade_name = "可征发人口", name = "军武" }
 
 # ---------------------------------------------------------------- 地块
 # 地块之间没有主次之分：每块地都能住人、劳作、建建筑，区别只在能做哪一行
@@ -633,7 +631,9 @@ per_cell = 50
 starve_rate = 100
 
 [vision]
-# 战争迷雾：每个人只看得到自己视野内的东西，视野不共享。地形公开
+# 此身份国君所属国家的都城作为公共地标
+public_capital_rank = "tianzi"
+# 战争迷雾：每个人只看得到自己视野内的东西，视野不共享。未探索地形不公开
 # 自己拥有、管理、攻占的城：城的地块再往外几格
 city = 2
 # 自己统领的军队：所在的格子再往外几格；兵种可以用 vision 另设，一支军队取看得最远的

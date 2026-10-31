@@ -49,6 +49,8 @@ pub struct ArmyReport {
     pub commander: Id,
     pub pos: Hex,
     pub dest: Option<Hex>,
+    /// 按当前情况预估的路线与回合落点，不含未探索路段。
+    pub march_plan: MarchPlan,
     pub moves_left: u32,
     /// 是否正在驻守城墙，供前端显示当前状态。
     pub on_wall: bool,
@@ -60,6 +62,22 @@ pub struct ArmyReport {
     /// 断粮后战斗力剩下的比例，1 为没有断粮
     pub strength: Fx,
     pub squads: Vec<SquadReport>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct MarchPlan {
+    /// 不含当前位置，依次经过的地块。
+    pub path: Vec<Hex>,
+    pub stops: Vec<MarchStop>,
+    /// 路线被阻挡、未探索，或可能遇敌，后续落点待定。
+    pub uncertain: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MarchStop {
+    /// 1 为本回合，2 为下回合，依次递增。
+    pub turn: u32,
+    pub at: Hex,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -196,6 +214,8 @@ pub struct GroupReport {
     pub size: u32,
     pub skills: Vec<String>,
     pub managed: u32,
+    /// 由服务器按技能槽计算的专精度。
+    pub specialization: Fx,
     pub happiness: Fx,
     pub culture: Fx,
     pub loyalty: Fx,
@@ -402,6 +422,7 @@ fn build_report(
                 commander: a.commander,
                 pos: a.pos,
                 dest: a.dest,
+                march_plan: crate::army::march_plan(state, config, a),
                 moves_left: a.moves_left,
                 on_wall: a.on_wall,
                 on_campaign: a.on_campaign(state),
@@ -1606,6 +1627,7 @@ fn city_report(
                 size: g.size,
                 skills: g.skills.clone(),
                 managed: city.labor_assigned(g.id),
+                specialization: config.specialization(g.skills.len()),
                 happiness: g.happiness,
                 culture: g.culture,
                 loyalty: g.loyalty,

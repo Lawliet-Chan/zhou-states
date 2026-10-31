@@ -1,7 +1,7 @@
 //! 战争迷雾：每个人只能看到自己视野内的东西，视野不共享。
 //!
 //! 视野来自自己拥有、管理、攻占的城（城的地块再往外几格）和自己统领的军队（所在的格子再往外几格）。
-//! 地形是公开的。别人的军队在视野内才看得到，离开视野后只记得最后一次看到的位置和时间；
+//! 未探索地形不公开。别人的军队在视野内才看得到，离开视野后只记得最后一次看到的位置和时间；
 //! 别人的城在视野内能看到外观（城名、所有者、国家、大致人口、城墙），看不到内情。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,6 +16,9 @@ use crate::state::{City, GameState, Id};
 /// 一个人记得的别人的军队和城。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Intel {
+    /// 已探索地块，离开视野后仍保留；兼容旧存档。
+    #[serde(default)]
+    pub explored: BTreeSet<Hex>,
     #[serde(default)]
     pub armies: BTreeMap<Id, ArmySighting>,
     #[serde(default)]
@@ -91,6 +94,21 @@ pub fn vision(state: &GameState, config: &Config, who: Id) -> BTreeSet<Hex> {
         .collect()
 }
 
+/// 王室都城是公共地标，公开位置不会提供周围视野。
+pub fn public_capitals(state: &GameState, config: &Config) -> BTreeSet<Id> {
+    state
+        .countries
+        .values()
+        .filter(|country| {
+            state.characters.get(&country.ruler).is_some_and(|ruler| {
+                !config.vision.public_capital_rank.is_empty()
+                    && ruler.rank == config.vision.public_capital_rank
+            })
+        })
+        .filter_map(|country| country.capital)
+        .collect()
+}
+
 /// 城的外观。
 pub fn glimpse(state: &GameState, config: &Config, city: &City) -> CitySighting {
     let population = city.population();
@@ -153,6 +171,14 @@ pub fn observe(state: &mut GameState, config: &Config) {
             .map(|c| glimpse(state, config, c))
             .collect();
         let intel = state.intel.entry(who).or_default();
+        // 旧存档没有探索记录，以当前视野和历史城市外观恢复已知部分。
+        if intel.explored.is_empty() {
+            for city in intel.cities.values() {
+                intel.explored.extend(city.tiles.iter().copied());
+            }
+            intel.explored.extend(intel.armies.values().map(|a| a.pos));
+        }
+        intel.explored.extend(seen.iter().copied());
         intel.armies.retain(|_, s| !seen.contains(&s.pos));
         for s in armies {
             intel.armies.insert(s.id, s);

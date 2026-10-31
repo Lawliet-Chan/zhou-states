@@ -499,20 +499,34 @@ fn tax_takes_rate_of_covered_peoples_income() {
 #[test]
 fn consumption_uses_private_wealth_before_treasury() {
     let config = config();
-    let (mut state, ids) = setup(&config);
-    // 全城 130 人每月需盐 need：民间只有 0.2，先用完，剩下的由府库补足
+    let scenario = r#"
+[[cities]]
+key = "city"
+name = "食粮测试城"
+totem = "周"
+tiles = { farmland = 1 }
+treasury = { grain = 100000, salt = 100000 }
+private_wealth = { grain = 200, salt = 1000, fish = 1000, meat = 1000 }
+[[cities.groups]]
+key = "people"
+name = "民众"
+size = 100
+skills = ["shi"]
+happiness = 600000
+"#;
+    let mut state = from_toml(scenario, &config).unwrap();
     let need =
-        Fx::int(130) / config.population.per_people * config.population.consumption[1].amount;
-    state
-        .cities
-        .get_mut(&ids.city)
-        .unwrap()
-        .private_wealth
-        .add("salt", Fx::milli(200));
+        Fx::int(100) / config.population.per_people * config.population.consumption[0].amount;
     end_turn(&mut state, &config);
-    let city = &state.cities[&ids.city];
-    assert_eq!(city.private_wealth.get("salt"), Fx::ZERO);
-    assert!((city.treasury.get("salt") - (Fx::int(100) - (need - Fx::milli(200)))).abs() <= TOL);
+    let city = state.cities.values().next().unwrap();
+    assert_eq!(city.private_wealth.get("grain"), Fx::ZERO);
+    assert!((city.treasury.get("grain") - (Fx::int(100) - (need - Fx::milli(200)))).abs() <= TOL);
+    assert_eq!(city.treasury.get("salt"), Fx::int(100));
+    for good in ["salt", "fish", "meat"] {
+        assert_eq!(city.private_wealth.get(good), Fx::int(1));
+    }
+    assert_eq!(config.population.consumption.len(), 1);
+    assert_eq!(config.population.consumption[0].goods, vec!["grain"]);
 }
 
 #[test]
@@ -4607,7 +4621,9 @@ fn rulers_halt_feuds_and_hand_out_tasks_and_disobedience_becomes_a_grievance() {
     let group = *state.cities[&bei]
         .groups
         .iter()
-        .find(|(_, g)| g.name == "东郭农人")
+        .find(|(_, g)| {
+            g.skills.contains(&"farming".to_string()) && g.skills.contains(&"weaving".to_string())
+        })
         .unwrap()
         .0;
     state
@@ -5030,4 +5046,104 @@ fn ranged_destruction_requires_entry_into_city_center() {
     .unwrap();
     assert_eq!(state.armies[&army].pos, seat);
     assert_eq!(state.cities[&city].occupier, Some(ids.player));
+}
+
+#[test]
+fn exploration_hides_unknown_land_and_keeps_travel_history() {
+    let config = config();
+    let (mut state, ids, army, _) = war_on_corridor(&config);
+    let distant = Hex::new(30, 0);
+    state.map.insert(distant, "forest");
+    zhou_core::vision::observe(&mut state, &config);
+    let snapshot = zhou_core::turn::snapshot(&state, &config);
+    let report = zhou_core::player_report(&state, &config, &snapshot, ids.player);
+    assert!(!report.map.iter().any(|c| c.pos == distant));
+    state.armies.get_mut(&army).unwrap().pos = distant;
+    zhou_core::vision::observe(&mut state, &config);
+    state.armies.get_mut(&army).unwrap().pos = Hex::new(0, 0);
+    zhou_core::vision::observe(&mut state, &config);
+    let snapshot = zhou_core::turn::snapshot(&state, &config);
+    let report = zhou_core::player_report(&state, &config, &snapshot, ids.player);
+    assert!(!report.vision.contains(&distant));
+    assert!(report.map.iter().any(|c| c.pos == distant));
+    let saved = serde_json::to_string(&state).unwrap();
+    let restored: GameState = serde_json::from_str(&saved).unwrap();
+    assert!(restored.intel[&ids.player].explored.contains(&distant));
+}
+
+#[test]
+fn royal_capital_is_a_landmark_without_revealing_neighbors() {
+    let config = config();
+    let (mut state, ids, _, other) = war_on_corridor(&config);
+    state.characters.get_mut(&other).unwrap().rank = config.vision.public_capital_rank.clone();
+    let capital = enemy_city(&mut state, &ids, other, Hex::new(30, 0));
+    let country = add_country(&mut state, "周", other);
+    state.countries.get_mut(&country).unwrap().capital = Some(capital);
+    let neighbor = Hex::new(31, 0);
+    state.map.insert(neighbor, "forest");
+    zhou_core::vision::observe(&mut state, &config);
+    let snapshot = zhou_core::turn::snapshot(&state, &config);
+    let report = zhou_core::player_report(&state, &config, &snapshot, ids.player);
+    let landmark = report
+        .foreign_cities
+        .iter()
+        .find(|c| c.sighting.id == capital)
+        .unwrap();
+    assert!(landmark.public_landmark);
+    assert!(!landmark.visible);
+    assert_eq!(landmark.sighting.tiles, vec![Hex::new(30, 0)]);
+    assert!(report.map.iter().any(|c| c.pos == Hex::new(30, 0)));
+    assert!(!report.map.iter().any(|c| c.pos == neighbor));
+    assert!(!report.cities.iter().any(|c| c.id == capital));
+}
+
+#[test]
+fn march_forecast_matches_real_turn_landings() {
+    let mut config = config();
+    // 下一格耗时超过整回合行军力时，实际规则仍允许满行军力走一格。
+    config.terrains.get_mut("forest").unwrap().move_cost = Some(3);
+    let (mut state, ids, army) = army_on_corridor(&config, &["infantry"]);
+    state.map.insert(Hex::new(2, 0), "forest");
+    let known: Vec<_> = state.map.cells.keys().copied().collect();
+    state
+        .intel
+        .entry(ids.player)
+        .or_default()
+        .explored
+        .extend(known);
+    apply(
+        &mut state,
+        &config,
+        ids.player,
+        &Command::MarchArmy {
+            army,
+            to: Hex::new(5, 0),
+            force: false,
+        },
+    )
+    .unwrap();
+    let plan = zhou_core::army::march_plan(&state, &config, &state.armies[&army]);
+    assert!(!plan.uncertain);
+    assert_eq!(plan.path.last(), Some(&Hex::new(5, 0)));
+    let mut elapsed = 1;
+    for stop in &plan.stops {
+        while elapsed < stop.turn {
+            end_turn_fed(&mut state, &config);
+            elapsed += 1;
+        }
+        assert_eq!(state.armies[&army].pos, stop.at);
+    }
+    assert_eq!(state.armies[&army].dest, None);
+}
+
+#[test]
+fn march_forecast_does_not_disclose_unexplored_route() {
+    let config = config();
+    let (mut state, ids, army) = army_on_corridor(&config, &["infantry"]);
+    state.armies.get_mut(&army).unwrap().dest = Some(Hex::new(5, 0));
+    let seen = zhou_core::vision::vision(&state, &config, ids.player);
+    let plan = zhou_core::army::march_plan(&state, &config, &state.armies[&army]);
+    assert!(plan.uncertain);
+    assert!(plan.path.iter().all(|h| seen.contains(h)));
+    assert!(plan.stops.iter().all(|s| seen.contains(&s.at)));
 }

@@ -2,6 +2,7 @@
 extends RefCounted
 
 var ui
+var _expanded := {}
 
 func _init(main) -> void:
 	ui = main
@@ -32,16 +33,85 @@ func officials(c: Dictionary, box: Node) -> void:
 		ui._note(box, "、".join(shi.skills.map(func(k): return Game.cname("skills", k))) + (" · 闲置" if shi.assignment == null else " · 正在主事"))
 		if can_manage(c):
 			var row = ui._buttons(box)
-			ui._btn(row, "派工·%s" % shi.name, assignment_dialog.bind(c, int(shi.id)), shi.assignment != null)
-			ui._btn(row, "罢免·%s" % shi.name, func(): ui._confirm("罢免%s，让他回到原来的人群？" % shi.name, func(): send(c, "dismiss_shi", {"shi": int(shi.id)}, "罢免士人")), shi.assignment != null)
+			ui._btn(row, "派工", assignment_dialog.bind(c, int(shi.id)), shi.assignment != null)
+			ui._btn(row, "罢免", func(): ui._confirm("罢免%s，让他回到原来的人群？" % shi.name, func(): send(c, "dismiss_shi", {"shi": int(shi.id)}, "罢免士人")), shi.assignment != null)
 
-func group_actions(c: Dictionary, g: Dictionary, box: Node) -> void:
-	ui._note(box, "已派工 %d 人 · 未派工 %d 人" % [int(g.managed), maxi(0, int(g.size) - int(g.managed))])
-	if not can_manage(c):
+## 展开状态按城、行业、工种与人群保存，服务器刷新后仍留在原处。
+func fold(box: Node, key: String, text: String) -> VBoxContainer:
+	var open: bool = _expanded.get(key, false)
+	var button := Button.new()
+	button.text = ("▾ " if open else "▸ ") + text
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.toggle_mode = true
+	button.button_pressed = open
+	box.add_child(button)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 12)
+	box.add_child(margin)
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", 8)
+	content.visible = open
+	margin.add_child(content)
+	margin.visible = open
+	button.toggled.connect(func(on):
+		_expanded[key] = on
+		content.visible = on
+		margin.visible = on
+		button.text = ("▾ " if on else "▸ ") + text)
+	return content
+
+func population(c: Dictionary, box: Node) -> void:
+	ui._section(box, "人口 · %d人" % int(c.population))
+	ui._note(box, "兼业人口可出现在多个行业；行业人数已去重，不能相加。")
+	var industries = Game.config.get("industries")
+	if not industries is Array or industries.is_empty():
+		ui._note(box, "服务器缺少行业配置，请重启服务器并重新连接。")
 		return
-	var row = ui._buttons(box)
-	ui._btn(row, "学技能·%s" % g.name, people_dialog.bind(c, g, "learn_skill"))
-	ui._btn(row, "调技能·%s" % g.name, arrange_dialog.bind(c, g))
+	for industry in industries:
+		var skills: Array = Game.config.skills.keys().filter(func(k): return Game.config.skills[k].get("industry", "") == industry.key)
+		var groups: Array = c.groups.filter(func(g): return g.skills.any(func(k): return skills.has(k)))
+		var total := 0
+		for g in groups:
+			total += int(g.size)
+		var key := "%d/%s" % [int(c.id), industry.key]
+		var category := fold(box, key, "%s · %d人" % [industry.name, total])
+		for skill in skills:
+			var members: Array = groups.filter(func(g): return g.skills.has(skill))
+			if members.is_empty():
+				continue
+			members.sort_custom(func(a, b):
+				if int(a.specialization) != int(b.specialization):
+					return int(a.specialization) > int(b.specialization)
+				if int(a.size) != int(b.size):
+					return int(a.size) > int(b.size)
+				return int(a.id) < int(b.id))
+			var count := 0
+			for g in members:
+				count += int(g.size)
+			var trade := str(Game.config.skills[skill].get("trade_name", Game.cname("skills", skill)))
+			var trade_box := fold(category, key + "/" + str(skill), "%s · %d人" % [trade, count])
+			for g in members:
+				var group_box := fold(trade_box, key + "/%s/%d" % [skill, int(g.id)], "专精%s%% · %d人" % [Game.pct(g.specialization), int(g.size)])
+				ui._note(group_box, "已派工%d · 未派工%d" % [int(g.managed), maxi(0, int(g.size) - int(g.managed))])
+				ui._note(group_box, "愉悦%s · 教化%s · 忠诚%s" % [Game.fx(g.happiness), Game.fx(g.culture), Game.fx(g.loyalty)])
+				if int(g.hostility) > 0:
+					ui._note(group_box, "敌视%s" % Game.fx(g.hostility))
+				for learning in c.learning:
+					if int(learning.group) == int(g.id):
+						ui._note(group_box, "学习%s · %d人 · %d回合" % [Game.cname("skills", learning.skill), int(learning.count), int(learning.turns)])
+				if can_manage(c):
+					var row = ui._buttons(group_box)
+					ui._btn(row, "学习", people_dialog.bind(c, g, "learn_skill"))
+					ui._btn(row, "调整技能", arrange_dialog.bind(c, g))
+		if industry.key == str(Game.config.skills[Game.config.military.skill].industry):
+			var units := fold(category, key + "/active", "现役军队")
+			var found := false
+			for army in Game.my_armies.values():
+				if int(army.city) == int(c.id):
+					found = true
+					ui._note(units, "军队%d · %d人" % [int(army.id), Game.army_size(army)])
+			if not found:
+				ui._note(units, "无现役军队")
 
 func number(box: Node, label: String, maximum: int, initial := 0) -> SpinBox:
 	var n := SpinBox.new()
@@ -81,7 +151,7 @@ func people_dialog(c: Dictionary, g: Dictionary, _kind: String) -> void:
 	var dv = ui._dialog("学习技能")
 	var d: ConfirmationDialog = dv[0]
 	var v: VBoxContainer = dv[1]
-	ui._note(v, "%s：%s" % [g.name, "、".join(g.skills.map(func(k): return Game.cname("skills", k)))])
+	ui._note(v, "%d人 · 专精%s%%" % [int(g.size), Game.pct(g.specialization)])
 	var shi_skill := str(Game.config.shi.skill)
 	var keys: Array = Game.config.skills.keys().filter(func(k): return k != shi_skill and not g.skills.has(k))
 	# 学「士」沿用任用指令；已有士技能的人群也能从这里任用。
@@ -197,12 +267,9 @@ func assignment_dialog(c: Dictionary, shi_id := -1) -> void:
 	var info := Label.new()
 	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(info)
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size.y = 180
-	v.add_child(scroll)
 	var workers := VBoxContainer.new()
 	workers.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(workers)
+	v.add_child(workers)
 	var inputs := {}
 	var update_workers := func():
 		ui._clear(workers)
@@ -233,7 +300,7 @@ func assignment_dialog(c: Dictionary, shi_id := -1) -> void:
 				for a in c.assignments:
 					if a.task.kind == "collect_tax":
 						available -= int(a.groups.get(str(int(g.id)), 0))
-			inputs[str(int(g.id))] = number(workers, "%s（%s）" % [g.name, "、".join(g.skills.map(func(k): return Game.cname("skills", k)))], available)
+			inputs[str(int(g.id))] = number(workers, "人口%d · 专精%s%%" % [int(g.id), Game.pct(g.specialization)], available)
 		ui._note(workers, "投入合计不能超过士人管理上限；收税覆盖人口，不占用劳力。")
 	var update_tasks := func():
 		task.clear()

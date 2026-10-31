@@ -76,16 +76,16 @@ private_wealth = { grain = 16000, salt = 7000 }
 tax_rate = 100
 
 [[cities.groups]]
-key = "dongguo"
-name = "东郭农人"
+key = "farmers_weaving"
+name = "农人"
 size = 160
 skills = ["farming", "weaving"]
 culture = 100000
 happiness = 600000
 
 [[cities.groups]]
-key = "nanli"
-name = "南里农人"
+key = "farmers"
+name = "农人"
 size = 80
 skills = ["farming"]
 culture = 100000
@@ -101,7 +101,7 @@ happiness = 550000
 
 [[cities.groups]]
 key = "xishi"
-name = "西市工匠"
+name = "工匠"
 size = 30
 skills = ["smelting", "armory"]
 culture = 120000
@@ -151,19 +151,19 @@ key = "ding"
 name = "士丁"
 from_group = "shizu"
 
-# 士甲：带东郭农人民营种五谷
+# 士甲：带农人民营种五谷
 [[cities.assignments]]
 key = "farm"
 shi = "jia"
 task = { kind = "produce", recipe = "grain", mode = "min" }
-workers = { dongguo = 35 }
+workers = { farmers_weaving = 35 }
 
-# 士乙：向东郭农人收税
+# 士乙：向农人收税
 [[cities.assignments]]
 key = "tax"
 shi = "yi"
 task = { kind = "collect_tax" }
-workers = { dongguo = 35 }
+workers = { farmers_weaving = 35 }
 
 # 士丙：官营铸兵器
 [[cities.assignments]]
@@ -172,12 +172,12 @@ shi = "bing"
 task = { kind = "produce", recipe = "weapon", mode = "guan" }
 workers = { xishi = 30 }
 
-# 士丁：征调南里农人修城墙
+# 士丁：征调农人修城墙
 [[cities.assignments]]
 key = "wall"
 shi = "ding"
 task = { kind = "construct", building = "city_wall", mode = "guan", on = "farmland" }
-workers = { nanli = 35 }
+workers = { farmers = 35 }
 
 # ---------------------------------------------------------------- 鄘：家宰史伯代管，每年上缴 30 粮
 

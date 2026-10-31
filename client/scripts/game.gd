@@ -8,6 +8,7 @@ signal waiting_changed
 signal turn_ended(report: Dictionary)
 signal command_result(req: int, ok: bool, ids: Array, error: String, desc: String)
 signal march_confirmation(command: Dictionary, cities: Array, desc: String)
+signal incompatible_server(message: String)
 signal server_error(message: String)
 
 var me := -1
@@ -78,6 +79,12 @@ func end_turn(ready: bool) -> void:
 func _on_message(msg: Dictionary) -> void:
 	match str(msg.get("type", "")):
 		"welcome":
+			# 新界面不能使用缺少行业配置的旧协议，避免随后反复访问不存在的字段。
+			var server_config: Dictionary = msg.get("config", {})
+			var industries = server_config.get("industries")
+			if not industries is Array or industries.is_empty():
+				incompatible_server.emit("服务器未提供行业配置，请停止旧服务器，重新运行 cargo run -p zhou-server 后再连接。")
+				return
 			me = int(msg.player)
 			config = msg.config
 			last_turn = msg.get("last_turn")

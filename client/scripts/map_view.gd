@@ -124,7 +124,7 @@ func _on_view_changed() -> void:
 		if Game.tile_city.has(h):
 			color = color.lerp(Game.person_color(Game.city_owner(Game.tile_city[h])), 0.15)
 		if not Game.vision.has(h):
-			color = color.darkened(0.55)
+			color = _fog_color(color, h)
 		var height := _height(h)
 		var tile := CylinderMesh.new()
 		tile.top_radius = HEX * 0.985
@@ -141,38 +141,66 @@ func _on_view_changed() -> void:
 				tree.radial_segments = 5
 				_mesh(tree, _point(hex_to_px(h) + offset, height + 11), color.darkened(0.22))
 	for h in Game.seat_city:
+		if not Game.cells.has(h):
+			continue
 		var id: int = Game.seat_city[h]
 		var base := _point(hex_to_px(h), _height(h))
 		var color := Game.person_color(Game.city_owner(id))
 		if not Game.vision.has(h):
-			color = color.darkened(0.5)
-		_box(base + Vector3(0, 5, 0), Vector3(25, 10, 20), Color("#c8ba9b").lerp(color, 0.25))
+			color = _fog_color(color, h)
+		_box(base + Vector3(0, 5, 0), Vector3(25, 10, 20), _fog_color(Color("#c8ba9b").lerp(Game.person_color(Game.city_owner(id)), 0.25), h))
 		_box(base + Vector3(0, 12, 0), Vector3(29, 4, 23), color)
 		var city = Game.my_cities.get(id, Game.foreign_cities.get(id))
-		# 己方 wall 是剩余血量，外城 wall 是布尔值，不能混用比较。
-		var standing_wall := false
-		if city != null:
-			if Game.my_cities.has(id):
-				standing_wall = city.wall != null and int(city.wall) > 0
-			else:
-				standing_wall = bool(city.wall) and not bool(city.wall_broken)
-		if standing_wall:
-			for side in [-1, 1]:
-				_box(base + Vector3(side * 21, 5, 0), Vector3(4, 10, 44), Color("#8b806b"))
-				_box(base + Vector3(0, 5, side * 21), Vector3(44, 10, 4), Color("#8b806b"))
 		var occupier = Game.city_occupier(id)
-		_flag(base + Vector3(14, 0, -12), Game.person_color(occupier) if occupier != null else color)
+		_flag(base + Vector3(14, 0, -12), _fog_color(Game.person_color(occupier), h) if occupier != null else color)
+	_build_city_walls()
 	for h in Game.armies_at:
 		var entries: Array = Game.armies_at[h]
 		for i in entries.size():
 			var entry: Dictionary = entries[i]
 			var color := Game.person_color(entry.data.commander)
 			if not entry.own and not entry.data.visible:
-				color = color.darkened(0.55)
+				color = _fog_color(color, h)
 			_flag(_point(_army_pos(h, i, entries.size()), _height(h)), color)
 	if not _centered:
 		center_map()
 	_update_camera()
+
+
+## 地形公开；视野外只显示压暗的地形与服务器提供的历史情报。
+func _fog_color(color: Color, h: Vector2i) -> Color:
+	return color if Game.vision.has(h) else color.lerp(Color("#202c33"), 0.8)
+
+
+func _build_city_walls() -> void:
+	# 后端尚无独立墙内地块集合，按现有城邑地块画外围，避免误画成治所城堡。
+	for id in Game.my_cities.keys() + Game.foreign_cities.keys():
+		var city: Dictionary = Game.my_cities.get(id, Game.foreign_cities.get(id))
+		var standing := false
+		if Game.my_cities.has(id):
+			standing = city.wall != null and int(city.wall) > 0
+		else:
+			standing = bool(city.wall) and not bool(city.wall_broken)
+		if not standing:
+			continue
+		var tiles := {}
+		for tile in city.tiles:
+			var h := Game.hx(tile.pos if Game.my_cities.has(id) else tile)
+			tiles[h] = true
+		for h in tiles:
+			if not Game.cells.has(h):
+				continue
+			var points := corners(hex_to_px(h))
+			for i in 6:
+				if tiles.has(h + DIRS[i]):
+					continue
+				var start: Vector2 = points[i]
+				var end: Vector2 = points[(i + 1) % 6]
+				var edge := end - start
+				var segment := BoxMesh.new()
+				segment.size = Vector3(edge.length(), 10, 3)
+				var wall := _mesh(segment, _point((start + end) / 2, _height(h) + 5), _fog_color(Color("#a49880"), h))
+				wall.rotation.y = -atan2(edge.y, edge.x)
 
 
 func _flag(base: Vector3, color: Color) -> void:
@@ -335,7 +363,7 @@ func _draw() -> void:
 		var points := corners(hex_to_px(h))
 		for i in 6:
 			if Game.tile_city.get(h + DIRS[i], -1) != id:
-				draw_line(_camera.unproject_position(_point(points[i], _height(h) + 1)), _camera.unproject_position(_point(points[(i + 1) % 6], _height(h) + 1)), Game.person_color(Game.city_owner(id)), 2, true)
+				draw_line(_camera.unproject_position(_point(points[i], _height(h) + 1)), _camera.unproject_position(_point(points[(i + 1) % 6], _height(h) + 1)), _fog_color(Game.person_color(Game.city_owner(id)), h), 2, true)
 	for h in highlight:
 		_outline(h, highlight[h])
 	if selected_hex != null:
@@ -349,11 +377,38 @@ func _draw() -> void:
 				var current := to_screen(hex_to_px(Game.hx(p)))
 				draw_dashed_line(previous, current, Color("#f3e3a0"), 2, 6)
 				previous = current
-		if army.dest != null:
-			draw_line(to_screen(hex_to_px(Game.hx(army.pos))), to_screen(hex_to_px(Game.hx(army.dest))), Color.WHITE, 3, true)
+		var plan: Dictionary = army.get("march_plan", {})
+		var previous := to_screen(hex_to_px(Game.hx(army.pos)))
+		for point in plan.get("path", []):
+			var h := Game.hx(point)
+			if not Game.cells.has(h):
+				break
+			var current := to_screen(hex_to_px(h))
+			draw_line(previous, current, Color("#f1e0aa"), 3, true)
+			previous = current
+		var stop_index := 0
+		for stop in plan.get("stops", []):
+			var h := Game.hx(stop.at)
+			if not Game.cells.has(h):
+				continue
+			var at := to_screen(hex_to_px(h))
+			draw_circle(at, 11, Color("#303b42"))
+			draw_arc(at, 11, 0, TAU, 24, Color("#f1e0aa"), 2, true)
+			var label := str(int(stop.turn))
+			_text(get_theme_default_font(), at + Vector2(0, -16 - (stop_index % 2) * 20), label, 15, Color("#fff1ba"), true)
+			stop_index += 1
 	var font := get_theme_default_font()
 	for h in Game.seat_city:
-		_text(font, to_screen(hex_to_px(h)) + Vector2(0, 29), Game.city_name(Game.seat_city[h]), 17, Color.WHITE, true)
+		if not Game.cells.has(h):
+			continue
+		var id: int = Game.seat_city[h]
+		var city: Dictionary = Game.my_cities.get(id, Game.foreign_cities.get(id))
+		var landmark: bool = bool(city.get("public_landmark", false))
+		var remembered: bool = not Game.my_cities.has(id) and not bool(city.visible) and not landmark
+		var label := Game.city_name(id)
+		if landmark:
+			label += " · 周王室都城"
+		_text(font, to_screen(hex_to_px(h)) + Vector2(0, 29), label, 17, Color("#8b969d") if remembered else Color.WHITE, true)
 	for h in Game.armies_at:
 		var entries: Array = Game.armies_at[h]
 		for i in entries.size():
@@ -364,7 +419,7 @@ func _draw() -> void:
 			var at := to_screen(_army_pos(h, i, entries.size()))
 			if int(entry.data.id) == selected_army:
 				draw_arc(at, 15, 0, TAU, 24, Color("#ffe14d"), 2)
-			_text(font, at + Vector2(0, 6), label, 14, Color.WHITE, true)
+			_text(font, at + Vector2(0, 6), label, 14, Color("#8b969d") if not entry.own and not entry.data.visible else Color.WHITE, true)
 
 
 func _text(font: Font, at: Vector2, s: String, fs: int, col: Color, outline := false) -> void:

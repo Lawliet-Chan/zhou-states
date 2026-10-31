@@ -21,6 +21,9 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub seasons: Vec<String>,
+    /// 人口页的行业及显示顺序。
+    #[serde(default)]
+    pub industries: Vec<IndustryDef>,
     /// 每季几个回合（月）
     pub months_per_season: u32,
     pub population: PopulationConfig,
@@ -252,8 +255,19 @@ fn default_value() -> Fx {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillDef {
+    #[serde(default)]
+    pub industry: Option<String>,
+    #[serde(default)]
+    pub trade_name: Option<String>,
     pub name: String,
     pub default_recipe: Option<String>,
+}
+
+/// 展示用行业，工种由技能定义归入对应行业。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndustryDef {
+    pub key: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -337,6 +351,9 @@ pub struct SupplyConfig {
 /// 视野。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VisionConfig {
+    /// 都城公开的国君身份，由配置指定。
+    #[serde(default)]
+    pub public_capital_rank: String,
     /// 城的地块再往外几格
     pub city: u32,
     /// 军队所在的格子再往外几格，兵种可以另设
