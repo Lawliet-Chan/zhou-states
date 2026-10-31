@@ -25,9 +25,22 @@ size_flags_vertical = 3
 theme_override_constants/separation = 0
 [node name="Map" parent="Game/Middle" instance=ExtResource("3")]
 [node name="RightPanel" parent="Game/Middle" instance=ExtResource("4")]
-[node name="LogPanel" type="PanelContainer" parent="Game"]
-[node name="Log" type="RichTextLabel" parent="Game/LogPanel"]
+[node name="Bottom" type="HBoxContainer" parent="Game"]
+[node name="LogPanel" type="PanelContainer" parent="Game/Bottom"]
+size_flags_horizontal = 3
+[node name="Log" type="RichTextLabel" parent="Game/Bottom/LogPanel"]
 custom_minimum_size = Vector2(0, 170)
 bbcode_enabled = true
 scroll_following = true
 selection_enabled = true
+
+[node name="TurnMargin" type="MarginContainer" parent="Game/Bottom"]
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_bottom = 8
+[node name="EndTurn" type="Button" parent="Game/Bottom/TurnMargin"]
+custom_minimum_size = Vector2(154, 154)
+size_flags_vertical = 4
+text = "结束回合"
+toggle_mode = true

@@ -190,3 +190,17 @@ where
         }
     }
 }
+
+#[test]
+fn assignment_command_reads_group_ids_from_json_object_keys() {
+    let json = r#"{"type":"start_assignment","city":6,"shi":19,"task":{"kind":"collect_tax"},"workers":{"15":12,"16":3}}"#;
+    let command: zhou_core::Command = serde_json::from_str(json).unwrap();
+    if let zhou_core::Command::StartAssignment { workers, .. } = &command {
+        assert_eq!(workers.get(&15), Some(&12));
+        assert_eq!(workers.get(&16), Some(&3));
+    } else {
+        panic!("应当读成派工指令");
+    }
+    let round_trip = serde_json::to_string(&command).unwrap();
+    assert!(serde_json::from_str::<zhou_core::Command>(&round_trip).is_ok());
+}

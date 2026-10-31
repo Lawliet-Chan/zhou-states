@@ -281,6 +281,8 @@ func task_text(t: Dictionary) -> String:
 			return "修%s" % cname("improvements", t.improvement)
 		"collect_tax":
 			return "收税"
+		"repair_wall":
+			return "修城墙"
 		"sacrifice":
 			return "祭祀"
 	return str(t.kind)

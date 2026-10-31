@@ -5,6 +5,8 @@ extends Control
 const TITLE := "其惟春秋"
 const PANEL_WIDTH := 400
 
+var domestic = preload("res://scripts/domestic.gd").new(self)
+
 var map_view: Control
 var login_box: Control
 var game_box: Control
@@ -127,7 +129,8 @@ func _build_game() -> void:
 	date_label = top.get_node("Date")
 	me_label = top.get_node("Character")
 	waiting_label = top.get_node("Waiting")
-	end_turn_btn = top.get_node("EndTurn")
+	end_turn_btn = $Game/Bottom/TurnMargin/EndTurn
+	_style_turn_button()
 	end_turn_btn.toggled.connect(func(on): Game.end_turn(on))
 	map_view = $Game/Middle/Map/View
 	hint_label = $Game/Middle/Map/Hint
@@ -136,7 +139,7 @@ func _build_game() -> void:
 	tabs = $Game/Middle/RightPanel
 	detail = tabs.get_node("详情/Margin/Content")
 	world = tabs.get_node("天下/Margin/Content")
-	log_box = $Game/LogPanel/Log
+	log_box = $Game/Bottom/LogPanel/Log
 
 
 func _vbox(parent: Node, sep := 6) -> VBoxContainer:
@@ -291,7 +294,8 @@ func _on_view_changed() -> void:
 
 func _on_waiting_changed() -> void:
 	end_turn_btn.set_pressed_no_signal(Game.ready_ids.has(Game.me))
-	end_turn_btn.text = "已结束回合（点击取消）" if end_turn_btn.button_pressed else "结束回合"
+	end_turn_btn.text = "已就绪\n取消就绪" if end_turn_btn.button_pressed else "结束回合"
+	end_turn_btn.tooltip_text = "等待其他玩家，点击取消就绪" if end_turn_btn.button_pressed else "所有在线玩家就绪后结算本回合"
 	if Game.waiting_ids.is_empty():
 		waiting_label.text = ""
 	else:
@@ -514,6 +518,7 @@ func _city_detail(c: Dictionary) -> void:
 	var can_raise := Game.commandable_cities().any(func(x): return int(x.id) == id)
 	_btn(acts, "征发军队", _raise_army_dialog.bind(c), not can_raise)
 
+	domestic.city_actions(c, detail)
 	_city_management(c)
 	_city_fief(c)
 
@@ -530,12 +535,15 @@ func _city_detail(c: Dictionary) -> void:
 			parts.append("%s ×%d" % [Game.cname("buildings", k), int(c.buildings[k])])
 		_note(detail, "、".join(parts))
 
+	domestic.officials(c, detail)
 	_section(detail, "人群")
 	for g in c.groups:
 		var skills: Array = g.skills.map(func(s): return Game.cname("skills", s))
 		_kv(detail, "%s %d 人" % [g.name, int(g.size)], "、".join(skills))
 		_note(detail, "　愉悦 %s　教化 %s　忠诚 %s%s" % [Game.fx(g.happiness), Game.fx(g.culture), Game.fx(g.loyalty),
 			"　敌视 %s" % Game.fx(g.hostility) if int(g.hostility) > 0 else ""])
+
+		domestic.group_actions(c, g, detail)
 
 	_section(detail, "工事")
 	if c.assignments.is_empty():
@@ -549,12 +557,12 @@ func _city_detail(c: Dictionary) -> void:
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		row.add_child(l)
 		var aid := int(a.id)
-		_btn(row, "撤", func(): Game.send_command({"type": "cancel_assignment", "city": id, "assignment": aid}, "%s撤掉「%s」" % [c.name, t]))
+		_btn(row, "撤", func(): Game.send_command({"type": "cancel_assignment", "city": id, "assignment": aid}, "%s撤掉「%s」" % [c.name, t]), not domestic.can_manage(c))
 		detail.add_child(row)
 	if not c.learning.is_empty():
 		_section(detail, "学技能")
 		for l in c.learning:
-			_note(detail, str(l))
+			_note(detail, "%d 人学习%s，已学 %d 回合" % [int(l.count), Game.cname("skills", l.skill), int(l.turns)])
 	_back_button()
 
 
@@ -848,6 +856,8 @@ func _confirm(text: String, cb: Callable) -> void:
 func _popup(d: Window) -> void:
 	d.popup_centered(Vector2i(520, 0))
 	await get_tree().process_frame
+	if not is_instance_valid(d) or d.is_queued_for_deletion():
+		return
 	d.size = Vector2i(520, 0)
 	d.move_to_center()
 
@@ -1031,3 +1041,17 @@ func _supply_dialog(a: Dictionary) -> void:
 		Game.send_command({"type": "open_supply_line", "army": aid, "from": int(c.id), "group": int(groups[group_opt.selected].id)},
 			"从%s给军队 %d 开粮道" % [c.name, aid]))
 	_popup(d)
+
+
+## 圆形回合键：留在右下角独立区域，避免遮住详情与日志。
+func _style_turn_button() -> void:
+	for state in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
+		var style := StyleBoxFlat.new()
+		style.bg_color = Color("#395e66") if state in ["pressed", "hover_pressed"] else Color("#263e54")
+		if state == "hover":
+			style.bg_color = Color("#365a73")
+		style.border_color = Color("#ead496") if state in ["hover", "focus"] else Color("#bda56a")
+		style.set_border_width_all(3)
+		style.set_corner_radius_all(80)
+		end_turn_btn.add_theme_stylebox_override(state, style)
+	end_turn_btn.add_theme_font_size_override("font_size", 24)

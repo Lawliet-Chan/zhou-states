@@ -14,6 +14,3 @@ text = "人物"
 size_flags_horizontal = 3
 [node name="Waiting" type="Label" parent="Row"]
 text = "等待玩家"
-[node name="EndTurn" type="Button" parent="Row"]
-text = "结束回合"
-toggle_mode = true

@@ -40,7 +40,7 @@ pub enum Command {
         city: Id,
         shi: Id,
         task: Task,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "deserialize_workers")]
         workers: BTreeMap<Id, u32>,
     },
     CancelAssignment {
@@ -244,6 +244,22 @@ pub enum Command {
         count: u32,
         skills: Vec<String>,
     },
+}
+
+/// 内部标记枚举会先缓存 JSON 对象，数字键此时已成为字符串，需要显式读回人群编号。
+fn deserialize_workers<'de, D>(deserializer: D) -> Result<BTreeMap<Id, u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = BTreeMap::<String, u32>::deserialize(deserializer)?;
+    raw.into_iter()
+        .map(|(group, count)| {
+            group
+                .parse::<Id>()
+                .map(|id| (id, count))
+                .map_err(serde::de::Error::custom)
+        })
+        .collect()
 }
 
 impl Command {
