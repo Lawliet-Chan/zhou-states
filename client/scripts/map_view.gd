@@ -149,7 +149,14 @@ func _on_view_changed() -> void:
 		_box(base + Vector3(0, 5, 0), Vector3(25, 10, 20), Color("#c8ba9b").lerp(color, 0.25))
 		_box(base + Vector3(0, 12, 0), Vector3(29, 4, 23), color)
 		var city = Game.my_cities.get(id, Game.foreign_cities.get(id))
-		if city != null and city.wall != null and city.wall != false:
+		# 己方 wall 是剩余血量，外城 wall 是布尔值，不能混用比较。
+		var standing_wall := false
+		if city != null:
+			if Game.my_cities.has(id):
+				standing_wall = city.wall != null and int(city.wall) > 0
+			else:
+				standing_wall = bool(city.wall) and not bool(city.wall_broken)
+		if standing_wall:
 			for side in [-1, 1]:
 				_box(base + Vector3(side * 21, 5, 0), Vector3(4, 10, 44), Color("#8b806b"))
 				_box(base + Vector3(0, 5, side * 21), Vector3(44, 10, 4), Color("#8b806b"))
